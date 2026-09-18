@@ -105,6 +105,8 @@ def _run_footage_only(cfg, args: argparse.Namespace) -> int:  # type: ignore[no-
     exit_code = 0
     for r in results:
         log.info("%-24s %-16s %s", r.name, r.status, r.final or r.message)
+        if r.status == "awaiting_review":
+            log.info("%-24s next: watch the video, then create APPROVED next to it (see REVIEW.md) before any upload", "")
         if r.status in {"failed", "needs_review"}:
             exit_code = 1
     return exit_code
@@ -130,7 +132,7 @@ def _run_normal(cfg, args: argparse.Namespace) -> int:  # type: ignore[no-untype
     )
     status = run_normal(cfg, opts)
     log.info("normal mode: %s", status)
-    return 0 if status in {"complete", "skipped_render", "dry_run"} else 1
+    return 0 if status in {"complete", "awaiting_review", "skipped_render", "dry_run"} else 1
 
 
 if __name__ == "__main__":  # pragma: no cover

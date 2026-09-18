@@ -29,6 +29,7 @@ def build_normal_timeline(
     voice_duration: float,
     music: dict[str, Any] | None = None,
     sfx: list[dict[str, Any]] | None = None,
+    watermark: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     by_line = {m.line_id: m for m in media}
     timing_by_id = {t.line_id: t for t in timings}
@@ -91,6 +92,7 @@ def build_normal_timeline(
         "voice": paths.rel(paths.voice_audio),
         "music": music,
         "sfx": sfx or [],
+        "watermark": watermark,
         "lines": lines_out,
     }
     validate(timeline, "timeline")

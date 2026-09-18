@@ -23,6 +23,7 @@ export const previewProps: ShortProps = {
     voice: '',
     music: null,
     sfx: [],
+    watermark: null,
     lines: [
       {
         line_id: 1,

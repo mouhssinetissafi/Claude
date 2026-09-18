@@ -107,6 +107,16 @@ per-source totals, recurring subjects, products/brands, rejected scenes and
 descriptions). `strongest_scenes` is diversified across sources and
 duplicate groups so one look cannot dominate.
 
+### Duration policy (before Phase 6)
+
+`inventory.total_usable_seconds` must cover `script.min_final_seconds`
+(45 s) times `script.min_footage_coverage`; otherwise the job stops with
+`needs_review` and no LLM or TTS call is made. After scripting, the estimated
+length is checked; after voicing, the measured length is checked. Short
+scripts are expanded with useful context up to `script.max_expansions` times;
+if still short the job stops for review. The timeline never slows footage and
+never repeats scenes to gain length.
+
 ### Script + shot plan (Phase 6)
 
 The inventory and topic are sent to the LLM with the editorial rules
@@ -125,6 +135,14 @@ No research/source module exists in this project, so `verified_sources` is
 always empty and the model is told so. Unsupported claims land in
 `facts_to_verify` and are appended to the description in `metadata.json` as a
 review block.
+
+Each job also receives a **variation profile** (hook style, structure, ending,
+pacing, opener rotation) derived from the job name, topic and footage hashes,
+and the prompt forbids reproducing or paraphrasing external text. After the
+script is written it is fingerprinted (word 3-shingles) and compared with
+`cache/originality_registry.json`: a near-duplicate of an earlier job is
+regenerated once with a different profile and otherwise stops the job for
+review. `work/<job>/originality.json` records the verdict.
 
 ### Voice, captions (Phases 7-8)
 
@@ -159,6 +177,17 @@ stream presence, resolution, duration, `blackdetect`, `silencedetect`, peak
 level (`volumedetect`) and caption overrun are checked. `qc.json` records each
 check. On failure the deliverables are copied to `review/<job>/` and nothing is
 uploaded.
+
+### Watermark, review and approval (Phases 9-13)
+
+* If `assets/branding/logo.png` exists and `branding.watermark_enabled` is
+  true, `timeline.json` carries a `watermark` entry and Remotion draws the
+  logo top-right inside the safe zones; the overlay pill is pushed below it.
+* `output/<job>/REVIEW.md` is written with the facts to verify, license
+  warnings, the originality verdict, the AI-disclosure flag (from clip
+  sidecars marked `ai_generated` / `altered`), duration and QC status.
+* After QC the job ends in `awaiting_review`. Create `output/<job>/APPROVED`
+  after watching the video; only then can `--upload` publish it.
 
 ## CLI flags
 

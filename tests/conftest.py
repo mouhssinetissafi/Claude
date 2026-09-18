@@ -34,9 +34,12 @@ def cfg(tmp_path: Path) -> Config:
     c.set("audio.music_enabled", False)
     c.set("audio.sfx_enabled", False)
     c.set("audio.normalize_loudness", False)
+    # Short synthetic fixtures: relax the 45s Short policy (tested explicitly in test_duration.py).
+    c.set("script.min_final_seconds", 6)
     c.set("script.target_min_seconds", 6)
     c.set("script.target_max_seconds", 20)
     c.set("script.hard_max_seconds", 30)
+    c.set("script.min_footage_coverage", 0.5)
     c.set("qc.min_duration_seconds", 2)
     return c
 

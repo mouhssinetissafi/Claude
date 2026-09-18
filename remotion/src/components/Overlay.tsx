@@ -3,8 +3,11 @@ import {AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig} from
 import type {Timeline} from '../types';
 import type {Theme} from '../themes';
 
-/** On-screen overlay_text for the current narration line (top third, inside safe zones). */
-export const Overlay: React.FC<{timeline: Timeline; theme: Theme}> = ({timeline, theme}) => {
+/**
+ * On-screen overlay_text for the current narration line (top third, inside safe zones).
+ * `topInset` pushes the pill below anything reserved at the top, such as the watermark box.
+ */
+export const Overlay: React.FC<{timeline: Timeline; theme: Theme; topInset?: number}> = ({timeline, theme, topInset = 0}) => {
   const frame = useCurrentFrame();
   const {fps, width} = useVideoConfig();
   const t = frame / fps;
@@ -27,7 +30,7 @@ export const Overlay: React.FC<{timeline: Timeline; theme: Theme}> = ({timeline,
       <div
         style={{
           position: 'absolute',
-          top: Math.max(o.topOffset, theme.safeTop + 40),
+          top: Math.max(o.topOffset, theme.safeTop + 40 + topInset),
           maxWidth: width - theme.safeSide * 2,
           padding: '18px 40px',
           borderRadius: o.borderRadius,

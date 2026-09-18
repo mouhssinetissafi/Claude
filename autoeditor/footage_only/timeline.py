@@ -261,6 +261,7 @@ def build_timeline(
     voice_duration: float,
     music: dict[str, Any] | None = None,
     sfx: list[dict[str, Any]] | None = None,
+    watermark: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     builder = TimelineBuilder(scenes, inventory, cfg)
     if not builder.scenes:
@@ -305,6 +306,7 @@ def build_timeline(
         "voice": paths.rel(paths.voice_audio),
         "music": music,
         "sfx": sfx or [],
+        "watermark": watermark,
         "lines": lines_out,
     }
     validate(timeline, "timeline")

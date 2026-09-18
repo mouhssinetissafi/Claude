@@ -46,6 +46,20 @@ export interface TimelineSfx {
   volume?: number;
 }
 
+export type WatermarkPosition = 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left';
+
+/** Optional logo watermark (assets/branding/logo.png), placed inside the safe zones. */
+export interface TimelineWatermark {
+  src: string;
+  position: WatermarkPosition;
+  /** Fraction of frame width reserved for the logo box. */
+  width_fraction: number;
+  /** Fraction of frame height reserved for the logo box. */
+  max_height_fraction: number;
+  opacity?: number;
+  margin?: number;
+}
+
 export interface Timeline {
   version: number;
   fps: number;
@@ -55,6 +69,7 @@ export interface Timeline {
   voice: string;
   music?: TimelineMusic | null;
   sfx?: TimelineSfx[];
+  watermark?: TimelineWatermark | null;
   lines: TimelineLine[];
 }
 
