@@ -17,9 +17,10 @@ inbox/
   iphone_air/                 # one folder = one job
     clip01.mp4
     clip02.mov
-    clip03.mp4
+    photo01.jpg               # photos and videos mix freely; photo-only jobs work too
+    photo02.png
     topic.txt                 # optional
-    clip01.license.json       # optional license sidecar
+    clip01.license.json       # optional license sidecar (works for photos as well)
     credits.json              # optional job-level license manifest
 ```
 
@@ -29,7 +30,36 @@ inbox/
 * `topic.txt` missing or empty: the most coherent story is inferred from the
   footage alone, without inventing facts.
 * Original files are never modified. Sub-folders are not scanned.
-* Supported extensions are listed in `config/default.yaml` (`media.supported_extensions`).
+* Supported extensions are listed in `config/default.yaml`
+  (`media.supported_extensions` for video, `media.photo_extensions` for photos).
+
+### Photos
+
+A photograph has no duration, so the editor turns each one into a few
+**framings**: slow camera moves that behave like short clips.
+
+| Framing | Move | When |
+|---|---|---|
+| `pan` | slow pan along the width with a whisper of zoom | photos at least 25 % wider than the 9:16 frame (landscape, square, 3:4) |
+| `push` | slow push in (or pull out on every other photo) | photos close to 9:16 |
+| `detail` | push-in on the most detailed region (local edge-energy heuristic) | always |
+| `reveal` | zoom-out from that detail to the whole picture | always |
+
+Each framing has a **hold budget** (`media.photo_hold_seconds`, 4 s) and the
+job's footage budget counts `photos x framings x hold` seconds. The timeline
+plays a framing's camera path at 1x, a later reuse continues where the path
+stopped, and the path never restarts to fill time; a segment may rest at the
+end of its move for up to one second (outro, sliver absorption) before the
+builder cuts elsewhere. The renderer receives the exact move as a `motion`
+object on the segment (`from`/`to` zoom and focal point, source size, easing)
+and keeps the visible window inside the picture, so a bare edge never shows.
+
+Normalized copies (`work/<job>/normalized/NN_name.jpg`) have EXIF orientation
+applied, GPS/device metadata stripped and are downscaled (never upscaled) to
+`media.photo_max_edge`. The vision model analyzes each photo **once**; the
+other framings inherit that analysis, and the inventory groups them as
+near-duplicates so one picture cannot dominate the video. Credits list photos
+under `IMAGES` with the same license-sidecar rules as clips.
 
 ### License sidecars (Phase 13)
 
@@ -76,7 +106,8 @@ ffmpeg -i in.mp4 -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=
 ```
 
 Nothing is stretched. Normalized files carry a content-hash sidecar so a
-re-run skips clips that have not changed.
+re-run skips clips that have not changed. Photos go through Pillow instead
+(see *Photos* above) and land next to the clips as JPEG.
 
 ### Scene detection (Phase 3)
 
@@ -107,6 +138,16 @@ per-source totals, recurring subjects, products/brands, rejected scenes and
 descriptions). `strongest_scenes` is diversified across sources and
 duplicate groups so one look cannot dominate.
 
+### Duration policy (before Phase 6)
+
+`inventory.total_usable_seconds` must cover `script.min_final_seconds`
+(45 s) times `script.min_footage_coverage`; otherwise the job stops with
+`needs_review` and no LLM or TTS call is made. After scripting, the estimated
+length is checked; after voicing, the measured length is checked. Short
+scripts are expanded with useful context up to `script.max_expansions` times;
+if still short the job stops for review. The timeline never slows footage and
+never repeats scenes to gain length.
+
 ### Script + shot plan (Phase 6)
 
 The inventory and topic are sent to the LLM with the editorial rules
@@ -125,6 +166,14 @@ No research/source module exists in this project, so `verified_sources` is
 always empty and the model is told so. Unsupported claims land in
 `facts_to_verify` and are appended to the description in `metadata.json` as a
 review block.
+
+Each job also receives a **variation profile** (hook style, structure, ending,
+pacing, opener rotation) derived from the job name, topic and footage hashes,
+and the prompt forbids reproducing or paraphrasing external text. After the
+script is written it is fingerprinted (word 3-shingles) and compared with
+`cache/originality_registry.json`: a near-duplicate of an earlier job is
+regenerated once with a different profile and otherwise stops the job for
+review. `work/<job>/originality.json` records the verdict.
 
 ### Voice, captions (Phases 7-8)
 
@@ -148,7 +197,9 @@ order at 1x speed. When they run short the fallback chain is:
 
 Segments never exceed their source span (no stretching), the final segment is
 extended through `timeline.outro_seconds`, and `check_timeline_math` asserts
-the whole thing tiles with no gaps. `timeline.json` is the single contract the
+the whole thing tiles with no gaps. Photo framings follow the same rules: the
+segment's `source_start`/`source_end` are seconds along the camera path and
+the attached `motion` is exactly that slice. `timeline.json` is the single contract the
 renderer reads; `script.json` keeps the narration and scene assignments.
 
 ### QC (Phase 11)
@@ -159,6 +210,17 @@ stream presence, resolution, duration, `blackdetect`, `silencedetect`, peak
 level (`volumedetect`) and caption overrun are checked. `qc.json` records each
 check. On failure the deliverables are copied to `review/<job>/` and nothing is
 uploaded.
+
+### Watermark, review and approval (Phases 9-13)
+
+* If `assets/branding/logo.png` exists and `branding.watermark_enabled` is
+  true, `timeline.json` carries a `watermark` entry and Remotion draws the
+  logo top-right inside the safe zones; the overlay pill is pushed below it.
+* `output/<job>/REVIEW.md` is written with the facts to verify, license
+  warnings, the originality verdict, the AI-disclosure flag (from clip
+  sidecars marked `ai_generated` / `altered`), duration and QC status.
+* After QC the job ends in `awaiting_review`. Create `output/<job>/APPROVED`
+  after watching the video; only then can `--upload` publish it.
 
 ## CLI flags
 

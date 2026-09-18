@@ -78,6 +78,34 @@ SCENE_ANALYSIS_SCHEMA: dict[str, Any] = {
     },
 }
 
+# Camera path over a still photograph (footage-only photo framings). Focal points are
+# fractions of the source image; scale is relative to the cover fit of the frame.
+MOTION_STATE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["scale", "x", "y"],
+    "properties": {
+        "scale": {"type": "number", "minimum": 1.0},
+        "x": {"type": "number", "minimum": 0, "maximum": 1},
+        "y": {"type": "number", "minimum": 0, "maximum": 1},
+    },
+}
+
+SEGMENT_MOTION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["framing", "src_width", "src_height", "from", "to"],
+    "properties": {
+        "framing": {"type": "string", "enum": ["pan", "push", "detail", "reveal"]},
+        "primary": {"type": "boolean"},
+        "fit": {"type": "string", "enum": ["cover"]},
+        "src_width": {"type": "integer", "minimum": 1},
+        "src_height": {"type": "integer", "minimum": 1},
+        "hold_seconds": {"type": "number", "minimum": 0},
+        "ease": {"type": "string", "enum": ["inout", "linear"]},
+        "from": MOTION_STATE_SCHEMA,
+        "to": MOTION_STATE_SCHEMA,
+    },
+}
+
 SCENE_RECORD_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["scene_id", "source_file", "start_time", "end_time", "duration"],
@@ -92,6 +120,8 @@ SCENE_RECORD_SCHEMA: dict[str, Any] = {
         "content_hash": {"type": "string"},
         "analysis": {"anyOf": [{"type": "null"}, SCENE_ANALYSIS_SCHEMA]},
         "rejected_reason": {"type": ["string", "null"]},
+        "kind": {"type": "string", "enum": ["video", "image"]},
+        "motion": {"anyOf": [{"type": "null"}, SEGMENT_MOTION_SCHEMA]},
     },
 }
 
@@ -136,6 +166,8 @@ SCRIPT_SCHEMA: dict[str, Any] = {
         "topic": {"type": ["string", "null"]},
         "theme": {"type": "string"},
         "facts_to_verify": {"type": "array", "items": {"type": "string"}},
+        "variation": {"type": ["object", "null"]},
+        "expansions": {"type": "integer", "minimum": 0},
         "lines": {"type": "array", "minItems": 1, "items": SCRIPT_LINE_SCHEMA},
     },
 }
@@ -269,6 +301,7 @@ TIMELINE_SEGMENT_SCHEMA: dict[str, Any] = {
         "effect": {"type": "string", "enum": ["none", "kenburns", "zoom_in", "zoom_out"]},
         "transition": {"type": "string", "enum": ["cut", "fade"]},
         "fallback": {"type": ["string", "null"]},
+        "motion": {"anyOf": [{"type": "null"}, SEGMENT_MOTION_SCHEMA]},
     },
 }
 
@@ -309,6 +342,23 @@ TIMELINE_SCHEMA: dict[str, Any] = {
                     "volume": {"type": "number"},
                 },
             },
+        },
+        "watermark": {
+            "anyOf": [
+                {"type": "null"},
+                {
+                    "type": "object",
+                    "required": ["src", "position"],
+                    "properties": {
+                        "src": {"type": "string"},
+                        "position": {"type": "string", "enum": ["top-right", "top-left", "bottom-right", "bottom-left"]},
+                        "width_fraction": {"type": "number", "minimum": 0, "maximum": 1},
+                        "max_height_fraction": {"type": "number", "minimum": 0, "maximum": 1},
+                        "opacity": {"type": "number", "minimum": 0, "maximum": 1},
+                        "margin": {"type": "integer", "minimum": 0},
+                    },
+                },
+            ]
         },
         "lines": {
             "type": "array",
@@ -366,6 +416,9 @@ METADATA_SCHEMA: dict[str, Any] = {
         "tags": {"type": "array", "items": {"type": "string"}},
         "facts_to_verify": {"type": "array", "items": {"type": "string"}},
         "thumbnail_base": {"type": ["string", "null"]},
+        "ai_disclosure": {"type": ["object", "null"]},
+        "originality": {"type": ["object", "null"]},
+        "review_required": {"type": "boolean"},
     },
 }
 

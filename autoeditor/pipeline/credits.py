@@ -30,6 +30,8 @@ class SourceCredit:
     url: str = ""
     notes: str = ""
     kind: str = "video"  # video | image | music | sfx
+    ai_generated: bool = False  # footage produced by a generative model (sidecar: ai_generated / synthetic / generated)
+    altered: bool = False  # realistic footage meaningfully altered (sidecar: altered / manipulated / edited_realism)
     extra: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -49,8 +51,20 @@ def _load_json(path: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+_AI_KEYS = ("ai_generated", "synthetic", "generated", "ai")
+_ALTERED_KEYS = ("altered", "manipulated", "edited_realism", "deepfake")
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
 def _from_mapping(file_name: str, data: dict[str, Any], kind: str) -> SourceCredit:
-    known = {"source", "author", "license", "url", "notes", "file", "kind"}
+    known = {"source", "author", "license", "url", "notes", "file", "kind", *_AI_KEYS, *_ALTERED_KEYS}
     return SourceCredit(
         file=file_name,
         source=str(data.get("source") or data.get("provider") or ""),
@@ -59,6 +73,8 @@ def _from_mapping(file_name: str, data: dict[str, Any], kind: str) -> SourceCred
         url=str(data.get("url") or data.get("link") or ""),
         notes=str(data.get("notes") or ""),
         kind=kind,
+        ai_generated=any(_truthy(data.get(k)) for k in _AI_KEYS if k in data),
+        altered=any(_truthy(data.get(k)) for k in _ALTERED_KEYS if k in data),
         extra={k: v for k, v in data.items() if k not in known},
     )
 

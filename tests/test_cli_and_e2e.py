@@ -130,6 +130,12 @@ def test_cli_main_mock_run(inbox: Path, cfg, monkeypatch) -> None:
             "media.frame_width",
             "audio.music_enabled",
             "audio.sfx_enabled",
+            "script.min_final_seconds",
+            "script.target_min_seconds",
+            "script.target_max_seconds",
+            "script.hard_max_seconds",
+            "script.min_footage_coverage",
+            "qc.min_duration_seconds",
         ):
             c.set(key, cfg.get(key))
         return c

@@ -1,6 +1,6 @@
 import React from 'react';
 import {AbsoluteFill, Img, Loop, OffthreadVideo, Sequence, interpolate, useCurrentFrame, useVideoConfig, Easing} from 'remotion';
-import type {Timeline, TimelineSegment} from '../types';
+import type {SegmentMotion, Timeline, TimelineSegment} from '../types';
 import type {Theme} from '../themes';
 import {resolveAsset, secondsToFrames} from '../lib/assets';
 
@@ -15,11 +15,60 @@ interface SegmentViewProps {
 
 const cover: React.CSSProperties = {width: '100%', height: '100%', objectFit: 'cover'};
 
+const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
+
+/**
+ * Style for a photo following a planned camera path. The picture is laid out at its
+ * cover size (it fills the frame at scale 1) and moved with a transform so the pan
+ * stays sub-pixel smooth; the visible window is clamped inside the picture so a bare
+ * edge can never show, whatever the planner sent.
+ */
+export const photoMotionStyle = (motion: SegmentMotion, progress: number, width: number, height: number): React.CSSProperties => {
+  const sw = Math.max(1, motion.src_width);
+  const sh = Math.max(1, motion.src_height);
+  const t = motion.ease === 'linear' ? progress : Easing.inOut(Easing.quad)(progress);
+  const scale = Math.max(1, lerp(motion.from.scale, motion.to.scale, t));
+  const fx = lerp(motion.from.x, motion.to.x, t);
+  const fy = lerp(motion.from.y, motion.to.y, t);
+  const base = Math.max(width / sw, height / sh);
+  const baseW = sw * base;
+  const baseH = sh * base;
+  const dw = baseW * scale;
+  const dh = baseH * scale;
+  const left = clamp(width / 2 - fx * dw, width - dw, 0);
+  const top = clamp(height / 2 - fy * dh, height - dh, 0);
+  return {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: baseW,
+    height: baseH,
+    transformOrigin: '0 0',
+    transform: `translate(${left.toFixed(3)}px, ${top.toFixed(3)}px) scale(${scale.toFixed(5)})`,
+    willChange: 'transform',
+  };
+};
+
 const SegmentView: React.FC<SegmentViewProps> = ({segment, assetBase, theme, durationInFrames, index, fadeFrames}) => {
   const frame = useCurrentFrame();
-  const {fps} = useVideoConfig();
+  const {fps, width, height} = useVideoConfig();
   const progress = durationInFrames > 1 ? Math.min(1, frame / (durationInFrames - 1)) : 1;
   const src = resolveAsset(assetBase, segment.src);
+
+  const opacity =
+    segment.transition === 'fade' && fadeFrames > 0
+      ? interpolate(frame, [0, fadeFrames], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})
+      : 1;
+
+  // Photo with a planned camera move (footage-only photo framings).
+  if (segment.type === 'image' && segment.motion) {
+    return (
+      <AbsoluteFill style={{opacity, background: theme.background, overflow: 'hidden'}}>
+        <Img src={src} style={photoMotionStyle(segment.motion, progress, width, height)} />
+      </AbsoluteFill>
+    );
+  }
 
   // Zoom / Ken Burns.
   let scale = 1;
@@ -40,11 +89,6 @@ const SegmentView: React.FC<SegmentViewProps> = ({segment, assetBase, theme, dur
     const drift = theme.videoDriftScale;
     scale = index % 2 === 0 ? 1 + drift * progress : 1 + drift * (1 - progress);
   }
-
-  const opacity =
-    segment.transition === 'fade' && fadeFrames > 0
-      ? interpolate(frame, [0, fadeFrames], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})
-      : 1;
 
   const style: React.CSSProperties = {
     ...cover,

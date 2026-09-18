@@ -25,13 +25,16 @@ class UploadNotConfiguredError(RuntimeError):
     pass
 
 
-def upload_allowed(cfg: Config, *, requested: bool, qc_passed: bool) -> tuple[bool, str]:
+def upload_allowed(cfg: Config, *, requested: bool, qc_passed: bool, approved: bool = False) -> tuple[bool, str]:
+    """Every condition must hold: explicit request, config, QC, human approval, credentials."""
     if not requested:
         return False, "upload not requested (--upload not given)"
     if not bool(cfg.get("upload.enabled", False)):
         return False, "upload.enabled is false in config"
     if not qc_passed:
         return False, "QC did not pass; output moved to review/"
+    if bool(cfg.get("upload.require_approval", True)) and not approved:
+        return False, "human approval missing: review output/<job>/REVIEW.md and create output/<job>/APPROVED"
     missing = [v for v in ("YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN") if not os.environ.get(v)]
     if missing:
         return False, f"missing environment variables: {', '.join(missing)}"

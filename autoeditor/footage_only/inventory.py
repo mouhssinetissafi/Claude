@@ -85,6 +85,8 @@ def build_inventory(scenes: list[Scene], cfg: Config, *, similarity_threshold: f
             {
                 "scene_id": s.scene_id,
                 "source_file": s.source_file,
+                "kind": s.kind,
+                "framing": s.framing,
                 "start_time": s.start_time,
                 "end_time": s.end_time,
                 "duration": s.duration,
@@ -135,12 +137,32 @@ def build_inventory(scenes: list[Scene], cfg: Config, *, similarity_threshold: f
     for s in usable:
         per_source[s.source_file] = round(per_source.get(s.source_file, 0.0) + s.duration, 3)
     total = round(sum(s.duration for s in usable), 3)
+    photos = [s for s in usable if s.is_photo]
+    videos = [s for s in usable if not s.is_photo]
+    media = {
+        "video_sources": len({s.source_file for s in videos}),
+        "photo_sources": len({s.source_file for s in photos}),
+        "video_seconds": round(sum(s.duration for s in videos), 3),
+        "photo_hold_seconds": round(sum(s.duration for s in photos), 3),
+        "photo_scenes": len(photos),
+    }
+    notes = [
+        "scene_ids in duplicate_groups look nearly identical; do not let one group dominate the video",
+        f"target video length is {cfg.get('script.target_min_seconds')}-{cfg.get('script.target_max_seconds')} seconds",
+    ]
+    if photos:
+        notes.append(
+            "scenes with kind 'image' are still photographs animated with a slow camera move (framing: pan, push, detail or reveal); "
+            "duration is the screen time each framing may hold (about 2-4 seconds works best); write to what the picture shows, "
+            "never to motion or sound it cannot contain, and keep framings of the same photo apart"
+        )
     return {
         "version": 1,
         "total_usable_seconds": total,
         "usable_scene_count": len(usable),
         "rejected_scene_count": len(rejected),
         "per_source_seconds": per_source,
+        "media": media,
         "usable_scenes": scene_rows,
         "strongest_scenes": strongest,
         "recurring_subjects": [{"subject": k, "count": v} for k, v in subjects.most_common(8) if v > 1],
@@ -148,10 +170,7 @@ def build_inventory(scenes: list[Scene], cfg: Config, *, similarity_threshold: f
         "possible_topics": [k for k, _ in topics.most_common(8)],
         "duplicate_groups": [g for g in groups if len(g) > 1],
         "rejected_scenes": rejected,
-        "notes": [
-            "scene_ids in duplicate_groups look nearly identical; do not let one group dominate the video",
-            f"target video length is {cfg.get('script.target_min_seconds')}-{cfg.get('script.target_max_seconds')} seconds",
-        ],
+        "notes": notes,
     }
 
 

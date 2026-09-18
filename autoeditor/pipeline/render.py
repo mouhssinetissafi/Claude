@@ -46,6 +46,8 @@ def collect_asset_paths(timeline: dict[str, Any]) -> list[str]:
         srcs.append(timeline["music"]["src"])
     for sfx in timeline.get("sfx", []):
         srcs.append(sfx["src"])
+    if timeline.get("watermark"):
+        srcs.append(timeline["watermark"]["src"])
     for line in timeline["lines"]:
         for seg in line["segments"]:
             srcs.append(seg["src"])

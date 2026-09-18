@@ -46,6 +46,7 @@ def build_metadata(
     cfg: Config,
     *,
     thumbnail_source: Path | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "metadata_request": True,
@@ -89,7 +90,11 @@ def build_metadata(
         "tags": [str(t).strip().lower().lstrip("#") for t in data.get("tags", []) if str(t).strip()][:30],
         "facts_to_verify": facts,
         "thumbnail_base": None,
+        "review_required": True,
     }
+    for key, value in (extra or {}).items():
+        if key in {"ai_disclosure", "originality", "review_required"}:
+            metadata[key] = value
     if thumbnail_source and thumbnail_source.exists():
         shutil.copy2(thumbnail_source, paths.thumbnail_jpg)
         metadata["thumbnail_base"] = paths.thumbnail_jpg.name

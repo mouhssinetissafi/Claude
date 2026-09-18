@@ -3,6 +3,9 @@
 Uses PySceneDetect when available, else ffmpeg's ``scene`` filter. Scenes are
 logical records (no physical splitting). Over-long scenes are chunked so the
 timeline has enough variety, and very short scenes are merged into neighbors.
+
+Photos become scenes too: each photo yields a few *framings* (slow camera
+moves, see ``photos.py``) that carry a hold budget instead of a real duration.
 """
 
 from __future__ import annotations
@@ -14,6 +17,16 @@ from typing import Any
 from autoeditor.cache import hash_text
 from autoeditor.config import Config
 from autoeditor.footage_only.normalize import SourceClip
+from autoeditor.footage_only.photos import (
+    PHOTO_KIND,
+    VIDEO_KIND,
+    PhotoError,
+    detail_focus,
+    photo_framing_count,
+    photo_hold_seconds,
+    plan_framings,
+    render_frame,
+)
 from autoeditor.logging_utils import get_logger
 from autoeditor.media import ffmpeg as ff
 from autoeditor.pipeline.job import JobPaths, write_json
@@ -34,6 +47,8 @@ class Scene:
     content_hash: str = ""
     analysis: dict[str, Any] | None = None
     rejected_reason: str | None = None
+    kind: str = VIDEO_KIND  # video | image
+    motion: dict[str, Any] | None = None  # photo framings only: the camera path (see photos.plan_framings)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -41,6 +56,19 @@ class Scene:
     @property
     def usable(self) -> bool:
         return self.rejected_reason is None
+
+    @property
+    def is_photo(self) -> bool:
+        return self.kind == PHOTO_KIND
+
+    @property
+    def framing(self) -> str | None:
+        return str(self.motion.get("framing")) if self.motion else None
+
+    @property
+    def primary_framing(self) -> bool:
+        """The framing that represents the whole photo (the one vision analyzes)."""
+        return bool(self.motion.get("primary", False)) if self.motion else False
 
 
 # --------------------------------------------------------------------------- #
@@ -161,12 +189,72 @@ def extract_scene_frames(scene: Scene, video: Path, paths: JobPaths, cfg: Config
     return out
 
 
+def photo_scenes(clip: SourceClip, photo_index: int, next_id: int, paths: JobPaths, cfg: Config, *, force: bool = False) -> list[Scene]:
+    """Turn one normalized photo into framing scenes with a rendered frame each."""
+    assert clip.normalized is not None
+    photo = paths.work / clip.normalized
+    width = int(clip.info.get("normalized_width") or clip.info.get("width") or 0)
+    height = int(clip.info.get("normalized_height") or clip.info.get("height") or 0)
+    if width <= 0 or height <= 0:
+        raise PhotoError(f"{clip.file}: normalized photo has no dimensions recorded")
+    frame_w = int(cfg.get("video.width", 1080))
+    frame_h = int(cfg.get("video.height", 1920))
+    hold = photo_hold_seconds(cfg)
+    framings = plan_framings(
+        width,
+        height,
+        frame_width=frame_w,
+        frame_height=frame_h,
+        index=photo_index,
+        hold=hold,
+        focus=detail_focus(photo),
+        count=photo_framing_count(cfg),
+        push_zoom=float(cfg.get("timeline.photo_push_zoom", 0.10)),
+        detail_zoom=float(cfg.get("timeline.photo_detail_zoom", 1.45)),
+    )
+    out: list[Scene] = []
+    for offset, motion in enumerate(framings):
+        scene = Scene(
+            scene_id=next_id + offset,
+            source_file=clip.file,
+            normalized_file=clip.normalized,
+            start_time=0.0,
+            end_time=hold,
+            duration=hold,
+            content_hash=hash_text(f"{clip.content_hash}|photo|{motion['framing']}|{hold:.3f}"),
+            kind=PHOTO_KIND,
+            motion=motion,
+        )
+        dst = paths.frames_dir / f"scene_{scene.scene_id:03d}_50.jpg"
+        if not dst.exists() or force:
+            render_frame(
+                photo,
+                dst,
+                motion=motion,
+                frame_width=frame_w,
+                frame_height=frame_h,
+                width=int(cfg.get("media.frame_width", 768)),
+                quality=int(cfg.get("media.frame_quality", 3)),
+            )
+        scene.frames = [paths.rel(dst)]
+        out.append(scene)
+    log.info("%s: photo -> %d framing(s): %s", clip.file, len(out), ", ".join(str(s.framing) for s in out))
+    return out
+
+
 def build_scenes(clips: list[SourceClip], paths: JobPaths, cfg: Config, *, force: bool = False) -> dict[str, Any]:
-    """Detect scenes for every usable clip, grab frames, write scenes.json."""
+    """Detect scenes for every usable clip (and framings for every photo), grab frames, write scenes.json."""
     scenes: list[Scene] = []
     next_id = 1
+    photo_index = 0
     for clip in clips:
         if not clip.usable or not clip.normalized:
+            continue
+        if clip.is_photo:
+            batch = photo_scenes(clip, photo_index, next_id, paths, cfg, force=force)
+            scenes.extend(batch)
+            next_id += len(batch)
+            photo_index += 1
             continue
         video = paths.work / clip.normalized
         duration = float(clip.normalized_duration or 0.0)

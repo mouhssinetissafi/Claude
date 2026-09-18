@@ -34,6 +34,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-duration", type=float, default=None, help="Target maximum narration seconds (script.target_max_seconds)")
     p.add_argument("--theme", default=None, help="Remotion theme name (render.theme)")
 
+    refs = p.add_argument_group("style references (config/references.yaml)")
+    refs.add_argument(
+        "--references",
+        choices=["refresh", "report", "profile", "import"],
+        default=None,
+        help="refresh = fetch public Shorts statistics (needs YOUTUBE_API_KEY); report = show tiers; profile = rebuild the house-style profile; import = load a manual stats JSON",
+    )
+    refs.add_argument("--references-file", type=Path, default=None, help="JSON file for --references import")
+    refs.add_argument("--references-only", nargs="*", default=None, help="Limit --references refresh to these handles")
+
     mode = p.add_argument_group("normal mode")
     mode.add_argument("--topic", default=None, help="Topic to write about")
     mode.add_argument("--topic-file", type=Path, default=None, help="File whose contents are the topic")
@@ -68,6 +78,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     if cfg.mock:
         log.info("Mock mode: no external APIs will be called")
+    if args.references:
+        from autoeditor.style.cli import run as run_references
+
+        return run_references(args.references, cfg, import_path=args.references_file, only=args.references_only)
 
     try:
         if args.footage_only:
@@ -105,6 +119,8 @@ def _run_footage_only(cfg, args: argparse.Namespace) -> int:  # type: ignore[no-
     exit_code = 0
     for r in results:
         log.info("%-24s %-16s %s", r.name, r.status, r.final or r.message)
+        if r.status == "awaiting_review":
+            log.info("%-24s next: watch the video, then create APPROVED next to it (see REVIEW.md) before any upload", "")
         if r.status in {"failed", "needs_review"}:
             exit_code = 1
     return exit_code
@@ -130,7 +146,7 @@ def _run_normal(cfg, args: argparse.Namespace) -> int:  # type: ignore[no-untype
     )
     status = run_normal(cfg, opts)
     log.info("normal mode: %s", status)
-    return 0 if status in {"complete", "skipped_render", "dry_run"} else 1
+    return 0 if status in {"complete", "awaiting_review", "skipped_render", "dry_run"} else 1
 
 
 if __name__ == "__main__":  # pragma: no cover
