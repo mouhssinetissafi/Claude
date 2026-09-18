@@ -1,0 +1,154 @@
+# Auto-Editor PRO default configuration.
+# Every value here can be overridden by:
+#   1. a user config file passed with --config path/to/config.yaml
+#   2. environment variables listed in README (API keys only, never stored here)
+#   3. CLI flags (e.g. --max-duration, --min-scene-duration)
+# Never put API keys in this file.
+
+project:
+  name: "Auto-Editor PRO"
+  work_dir: "work"
+  output_dir: "output"
+  cache_dir: "cache"
+  review_dir: "review"
+  inbox_dir: "inbox"
+  assets_dir: "assets"
+
+video:
+  width: 1080
+  height: 1920
+  fps: 30
+  codec: "libx264"
+  crf: 18
+  pix_fmt: "yuv420p"
+  preset: "medium"
+
+script:
+  # Target spoken length in seconds (both modes)
+  target_min_seconds: 35
+  target_max_seconds: 55
+  hard_max_seconds: 60
+  words_per_second: 2.6   # used for length estimation and mock TTS duration
+  language: "en-US"
+  banned_phrases:
+    - "did you know"
+    - "in this video"
+    - "mind-blowing"
+    - "mind blowing"
+    - "game changer"
+    - "game-changer"
+    - "insane"
+    - "i tested"
+    - "i used"
+    - "i recommend"
+
+media:
+  # Footage-only validation thresholds
+  min_clip_seconds: 1.0
+  min_scene_seconds: 0.8
+  min_width: 480
+  min_height: 480
+  supported_extensions: [".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi", ".mts", ".m2ts"]
+  # Scene detection
+  scene_detector: "content"        # content | adaptive | ffmpeg
+  scene_threshold: 27.0            # PySceneDetect ContentDetector threshold
+  ffmpeg_scene_threshold: 0.4      # fallback ffmpeg scene filter threshold
+  max_scenes_per_source: 40
+  max_scene_seconds: 12.0          # longer scenes are chunked so the timeline has variety
+  frame_positions: [0.5, 0.25, 0.75]   # mid first, then quarter points
+  frame_width: 768                 # thumbnail width sent to the vision model
+  frame_quality: 3                 # ffmpeg -q:v (2=best, 31=worst)
+
+timeline:
+  # Approximate visual change cadence (seconds); not enforced mechanically
+  min_segment_seconds: 1.2
+  target_segment_seconds: 2.2
+  max_segment_seconds: 4.5
+  repeat_window_seconds: 30       # avoid reusing a scene within this window
+  allow_still_frame_fallback: true
+  transition: "cut"               # cut | fade
+  fade_seconds: 0.25
+  ken_burns_images: true
+  outro_seconds: 0.6              # visual tail after narration ends
+
+vision:
+  provider: "anthropic"            # anthropic | mock
+  model: "claude-opus-5"
+  effort: "medium"                 # per-frame analysis does not need deep reasoning
+  max_tokens: 4000
+  max_frames_per_scene: 2
+  min_quality_score: 40
+  min_visual_interest_score: 30
+  reject_watermarks: true
+
+llm:
+  provider: "anthropic"            # anthropic | mock
+  model: "claude-opus-5"
+  max_tokens: 16000
+  effort: "high"                   # low | medium | high | xhigh | max
+  max_json_retries: 2
+  refusal_fallbacks: true          # server-side fallback model if a safety classifier declines
+
+tts:
+  provider: "elevenlabs"           # elevenlabs | mock
+  # ElevenLabs settings (voice id read from ELEVENLABS_VOICE_ID env when set)
+  model_id: "eleven_multilingual_v2"
+  output_format: "mp3_44100_128"
+  stability: 0.5
+  similarity_boost: 0.75
+  inter_line_gap_seconds: 0.12     # small natural gap between lines
+  trim_silence_db: -45             # trim leading/trailing silence quieter than this
+
+captions:
+  provider: "faster_whisper"       # faster_whisper | mock
+  model_size: "small"
+  device: "cpu"
+  compute_type: "int8"
+  language: "en"
+  max_words_per_caption: 4
+
+audio:
+  music_enabled: true
+  music_dir: "assets/music"
+  music_volume: 0.12
+  ducking: true
+  ducking_volume: 0.05
+  sfx_enabled: true
+  sfx_dir: "assets/sfx"
+  sfx_volume: 0.35
+  # Loudness normalization is applied ONCE, in the finalize step before QC.
+  normalize_loudness: true
+  loudness_target_lufs: -14
+  loudness_true_peak_dbtp: -1.0
+  loudness_range_lu: 11
+
+render:
+  remotion_dir: "remotion"
+  composition: "Short"
+  entry: "src/index.ts"
+  browser_executable: ""           # empty = let Remotion resolve; set REMOTION_BROWSER env to override
+  concurrency: 0                   # 0 = Remotion default
+  theme: "default"
+  timeout_seconds: 1800
+
+qc:
+  min_duration_seconds: 20
+  max_duration_seconds: 62
+  black_min_seconds: 1.0
+  black_pixel_threshold: 0.10
+  silence_noise_db: -45
+  silence_min_seconds: 2.0
+  max_peak_dbfs: -0.5
+  caption_overrun_tolerance_seconds: 0.35
+
+metadata:
+  max_title_chars: 100
+  max_description_chars: 4500
+  default_hashtags: ["#shorts"]
+
+upload:
+  enabled: false                   # uploading is never automatic; requires explicit --upload and credentials
+  provider: "youtube"
+
+state:
+  file_name: "job_state.json"

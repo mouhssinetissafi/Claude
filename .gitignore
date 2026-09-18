@@ -1,0 +1,41 @@
+# Secrets
+.env
+*.key
+
+# Job data (large, regenerated)
+work/*
+!work/.gitkeep
+output/*
+!output/.gitkeep
+cache/*
+!cache/.gitkeep
+review/*
+!review/.gitkeep
+inbox/*
+!inbox/.gitkeep
+!inbox/README.md
+remotion/public/jobs/
+remotion/out/
+assets/media/*
+!assets/media/.gitkeep
+assets/music/*
+!assets/music/.gitkeep
+assets/sfx/*
+!assets/sfx/.gitkeep
+
+# Node
+remotion/node_modules/
+remotion/.remotion/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Logs
+*.log
