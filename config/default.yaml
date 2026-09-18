@@ -54,6 +54,13 @@ media:
   min_width: 480
   min_height: 480
   supported_extensions: [".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi", ".mts", ".m2ts"]
+  # Photos are first-class inputs (photo-only or mixed jobs). Each photo becomes a few
+  # slow camera moves ("framings") that behave like short clips; see docs/FOOTAGE_ONLY.md.
+  photo_extensions: [".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"]
+  photo_hold_seconds: 4.0          # screen-time budget per framing (one photo = framings x hold seconds of "footage")
+  photo_framings: 3                # 1-3: pan/push on the whole photo, push-in on a detail, zoom-out reveal
+  photo_max_edge: 3840             # normalized copies are downscaled (never upscaled) to this long edge; EXIF applied, metadata stripped
+  photo_quality: 92                # JPEG quality of the normalized copy
   # Scene detection
   scene_detector: "content"        # content | adaptive | ffmpeg
   scene_threshold: 27.0            # PySceneDetect ContentDetector threshold
@@ -74,6 +81,8 @@ timeline:
   transition: "cut"               # cut | fade
   fade_seconds: 0.25
   ken_burns_images: true
+  photo_push_zoom: 0.10           # slow push/pull on a whole photo (10 % over the hold)
+  photo_detail_zoom: 1.45         # magnification of the "detail" framing
   outro_seconds: 0.6              # visual tail after narration ends
 
 vision:

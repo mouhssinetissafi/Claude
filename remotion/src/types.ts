@@ -6,6 +6,31 @@
 export type SegmentType = 'video' | 'image';
 export type SegmentEffect = 'none' | 'kenburns' | 'zoom_in' | 'zoom_out';
 export type SegmentTransition = 'cut' | 'fade';
+export type MotionFraming = 'pan' | 'push' | 'detail' | 'reveal';
+
+/** One camera state over a photo: zoom relative to the cover fit, focal point as image fractions. */
+export interface MotionState {
+  scale: number;
+  x: number;
+  y: number;
+}
+
+/**
+ * Camera path over a still photograph, planned by the Python side
+ * (autoeditor/footage_only/photos.py). The renderer interpolates from -> to
+ * across the segment and keeps the visible window inside the picture.
+ */
+export interface SegmentMotion {
+  framing: MotionFraming;
+  primary?: boolean;
+  fit?: 'cover';
+  src_width: number;
+  src_height: number;
+  hold_seconds?: number;
+  ease?: 'inout' | 'linear';
+  from: MotionState;
+  to: MotionState;
+}
 
 export interface TimelineSegment {
   /** Path relative to the job asset base (e.g. "normalized/01_clip.mp4"). */
@@ -14,7 +39,7 @@ export interface TimelineSegment {
   /** Timeline seconds. */
   start: number;
   end: number;
-  /** Source seconds inside the media file (video only). */
+  /** Source seconds inside the media file (video), or seconds along the camera path (photo framings). */
   source_start?: number;
   source_end?: number;
   scene_id?: number | null;
@@ -22,6 +47,8 @@ export interface TimelineSegment {
   transition?: SegmentTransition;
   /** Diagnostic: how this segment was chosen ("still_frame", "loop", ...). */
   fallback?: string | null;
+  /** Present on photo segments: the exact camera move to render. */
+  motion?: SegmentMotion | null;
 }
 
 export interface TimelineLine {

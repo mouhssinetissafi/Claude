@@ -101,6 +101,19 @@ Plumbing check with no API cost:
 python run.py --footage-only --inbox ./inbox --mock
 ```
 
+### 5a. Photos and mixed jobs
+
+Drop photos (`.jpg`, `.jpeg`, `.png`, `.webp`, `.tif`, `.bmp`) into the job
+folder next to the clips, or on their own. Each photo becomes a few slow
+camera moves (a pan or push over the whole picture, a push-in on its most
+detailed region, a zoom-out reveal) that the timeline treats like short clips
+with a screen-time budget; nothing is stretched, restarted or left static.
+Originals are never touched: a normalized copy with EXIF orientation applied
+and location metadata stripped lives under `work/<job>/normalized/`. Tune the
+look with `media.photo_hold_seconds`, `media.photo_framings`,
+`timeline.photo_push_zoom` and `timeline.photo_detail_zoom`. Details in
+`docs/FOOTAGE_ONLY.md`.
+
 ## 6. Normal mode example
 
 ```bash

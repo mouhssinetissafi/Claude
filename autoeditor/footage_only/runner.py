@@ -21,6 +21,7 @@ from autoeditor.config import Config
 from autoeditor.footage_only.discovery import DiscoveredJob, discover_jobs
 from autoeditor.footage_only.inventory import build_inventory, write_inventory
 from autoeditor.footage_only.normalize import SourceClip, load_manifest, normalize_clips
+from autoeditor.footage_only.photos import PHOTO_KIND, PhotoError, photo_budget_seconds, photo_framing_count, photo_hold_seconds, probe_photo, validate_photo
 from autoeditor.footage_only.scenes import Scene, build_scenes, scenes_from_doc
 from autoeditor.footage_only.shot_plan import estimate_seconds, expand_shot_plan, generate_shot_plan
 from autoeditor.footage_only.timeline import build_timeline
@@ -94,6 +95,27 @@ def dry_run_job(job: DiscoveredJob, cfg: Config, paths: JobPaths) -> JobResult:
     usable = 0
     total = 0.0
     for clip in job.clips:
+        if job.kind_of(clip) == PHOTO_KIND:
+            try:
+                pinfo = probe_photo(clip)
+            except PhotoError as exc:
+                log.info("  %s -> REJECT (%s)", clip.name, exc)
+                continue
+            preason = validate_photo(pinfo, cfg)
+            log.info(
+                "  %s -> %s [photo %dx%d %s; %d framing(s) x %.1fs hold]",
+                clip.name,
+                f"REJECT ({preason})" if preason else "ok",
+                pinfo.width,
+                pinfo.height,
+                pinfo.format,
+                photo_framing_count(cfg),
+                photo_hold_seconds(cfg),
+            )
+            if preason is None:
+                usable += 1
+                total += photo_budget_seconds(cfg)
+            continue
         try:
             info = probe(clip)
         except ProbeError as exc:
@@ -108,7 +130,14 @@ def dry_run_job(job: DiscoveredJob, cfg: Config, paths: JobPaths) -> JobResult:
             usable += 1
             total += info.duration
     ok, why = footage_sufficient(total, policy)
-    log.info("  usable clips: %d, total footage: %.1fs, topic: %s", usable, total, job.topic or "<infer>")
+    log.info(
+        "  usable media: %d (%d video, %d photo), total screen-time budget: %.1fs, topic: %s",
+        usable,
+        len(job.videos),
+        len(job.photos),
+        total,
+        job.topic or "<infer>",
+    )
     log.info("  duration policy: %s", why)
     for c in job.credits:
         log.info("  license %s: %s", c.file, c.license)
@@ -193,7 +222,7 @@ def _run_stages(job: DiscoveredJob, cfg: Config, opts: FootageOnlyOptions, paths
     # Phase 2 -------------------------------------------------------------
     clips: list[SourceClip] = state.run_stage("normalized", lambda: normalize_clips(job, paths, cfg), skip_if_done=lambda: load_manifest(paths))
     if not any(c.usable for c in clips):
-        raise StageError("normalized", RuntimeError("no usable clips after validation"))
+        raise StageError("normalized", RuntimeError("no usable clips or photos after validation"))
 
     # Phases 3-5 ------------------------------------------------------------
     def analyze() -> tuple[dict[str, Any], list[Scene], dict[str, Any]]:

@@ -8,6 +8,10 @@ scenes fill the slot in order; when they run short the fallback chain is:
   3. tasteful reuse of a scene outside the repeat window
   4. a Ken Burns still frame of the best available scene
 
+Photo framings are treated exactly like clips: their camera path plays at 1x
+along its hold budget, a later reuse continues from where it stopped, and the
+exact move is attached to the segment as ``motion`` for the renderer.
+
 No slot is ever left empty and clips are never stretched.
 """
 
@@ -17,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from autoeditor.config import Config
+from autoeditor.footage_only.photos import PHOTO_GRACE_SECONDS, slice_motion
 from autoeditor.footage_only.scenes import Scene
 from autoeditor.logging_utils import get_logger
 from autoeditor.pipeline.job import JobPaths, write_json
@@ -53,23 +58,27 @@ class SceneUsage:
 def _segment(scene: Scene, *, start: float, length: float, offset: float, transition: str, fallback: str | None) -> dict[str, Any]:
     return {
         "src": scene.normalized_file,
-        "type": "video",
+        "type": "image" if scene.is_photo else "video",
         "start": round(start, 3),
         "end": round(start + length, 3),
         "source_start": round(scene.start_time + offset, 3),
         "source_end": round(scene.start_time + offset + length, 3),
         "scene_id": scene.scene_id,
-        "effect": "none",
+        "effect": "kenburns" if scene.is_photo else "none",
         "transition": transition,
         "fallback": fallback,
     }
 
 
 def _still_segment(scene: Scene, *, start: float, length: float, transition: str) -> dict[str, Any]:
-    frame = scene.frames[0] if scene.frames else scene.normalized_file
+    if scene.is_photo:
+        src, kind = scene.normalized_file, "image"  # the photo itself, replayed with its own camera move
+    else:
+        src = scene.frames[0] if scene.frames else scene.normalized_file
+        kind = "image" if scene.frames else "video"
     return {
-        "src": frame,
-        "type": "image" if scene.frames else "video",
+        "src": src,
+        "type": kind,
         "start": round(start, 3),
         "end": round(start + length, 3),
         "source_start": round(scene.start_time, 3),
@@ -79,6 +88,11 @@ def _still_segment(scene: Scene, *, start: float, length: float, transition: str
         "transition": transition,
         "fallback": "still_frame",
     }
+
+
+def _budgeted(seg: dict[str, Any]) -> bool:
+    """Segments whose source span must equal the slot: real clips and photo camera paths."""
+    return seg["type"] == "video" or (seg["type"] == "image" and seg.get("fallback") != "still_frame" and "source_end" in seg)
 
 
 class TimelineBuilder:
@@ -151,7 +165,7 @@ class TimelineBuilder:
         if length - amount < SLIVER:
             return 0.0
         last["end"] = round(last["end"] - amount, 3)
-        if last["type"] == "video":
+        if _budgeted(last):
             last["source_end"] = round(last["source_end"] - amount, 3)
             scene_id = last.get("scene_id")
             if scene_id in self.usage.consumed:
@@ -163,16 +177,31 @@ class TimelineBuilder:
         if not segments or extra <= 0:
             return False
         last = segments[-1]
-        if last["type"] == "image":
-            last["end"] = round(last["end"] + extra, 3)
+        if not _budgeted(last):
+            last["end"] = round(last["end"] + extra, 3)  # a still frame can hold as long as needed
             return True
         scene = self.scenes.get(last.get("scene_id") or -1)
-        if scene is None or last["source_end"] + extra > scene.end_time + EPS:
+        if scene is None:
+            return False
+        # A photo may rest at the end of its camera path for a moment; a clip has no frames to give.
+        grace = PHOTO_GRACE_SECONDS if scene.is_photo else 0.0
+        if last["source_end"] + extra > scene.end_time + grace + EPS:
             return False
         last["end"] = round(last["end"] + extra, 3)
         last["source_end"] = round(last["source_end"] + extra, 3)
         self.usage.record(scene, extra, at)
         return True
+
+    def attach_motion(self, seg: dict[str, Any]) -> None:
+        """Give a photo segment the slice of its framing's camera path that it plays."""
+        if seg["type"] != "image":
+            return
+        scene = self.scenes.get(seg.get("scene_id") or -1)
+        if scene is None or not scene.is_photo or not scene.motion:
+            return
+        start = float(seg.get("source_start", scene.start_time)) - scene.start_time
+        end = float(seg.get("source_end", start + (seg["end"] - seg["start"]))) - scene.start_time
+        seg["motion"] = slice_motion(scene.motion, start, end, scene.duration)
 
     # ------------------------------------------------------------------ #
     def fill_line(self, line: dict[str, Any], timing: LineTiming) -> list[dict[str, Any]]:
@@ -245,7 +274,7 @@ class TimelineBuilder:
             drift = round(end - last["end"], 3)
             if abs(drift) > 0:
                 last["end"] = round(end, 3)
-                if last["type"] == "video":
+                if _budgeted(last):
                     last["source_end"] = round(last["source_end"] + drift, 3)
         return segments
 
@@ -297,6 +326,10 @@ def build_timeline(
             segments.append(_still_segment(anchor, start=last["end"], length=extra, transition=builder.transition))
         lines_out[-1]["end"] = total
 
+    for line in lines_out:
+        for seg in line["segments"]:
+            builder.attach_motion(seg)
+
     timeline = {
         "version": 1,
         "fps": int(cfg.get("video.fps", 30)),
@@ -321,8 +354,9 @@ def build_timeline(
 def check_timeline_math(timeline: dict[str, Any], *, allow_loop: bool = False) -> None:
     """Assert segments tile each line exactly and never exceed the duration.
 
-    Video segments must play at 1x: the source span equals the slot, unless the
-    segment is explicitly a loop (normal mode) and ``allow_loop`` is set.
+    Video segments (and photo camera paths) must play at 1x: the source span
+    equals the slot, unless the segment is explicitly a loop (normal mode) and
+    ``allow_loop`` is set.
     """
     for line in timeline["lines"]:
         cursor = line["start"]
@@ -331,7 +365,7 @@ def check_timeline_math(timeline: dict[str, Any], *, allow_loop: bool = False) -
                 raise ValueError(f"line {line['line_id']}: gap/overlap at {cursor} (segment starts {seg['start']})")
             if seg["end"] <= seg["start"]:
                 raise ValueError(f"line {line['line_id']}: empty segment at {seg['start']}")
-            if seg["type"] == "video":
+            if seg["type"] == "video" or (seg.get("motion") and _budgeted(seg)):
                 slot = seg["end"] - seg["start"]
                 span = seg["source_end"] - seg["source_start"]
                 if span - slot > EPS * 2:

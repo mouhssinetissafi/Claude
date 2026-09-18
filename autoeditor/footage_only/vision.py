@@ -8,6 +8,7 @@ from typing import Any
 
 from autoeditor.cache import JsonCache, hash_file, make_key
 from autoeditor.config import Config
+from autoeditor.footage_only.photos import FRAMING_LABELS
 from autoeditor.footage_only.scenes import Scene
 from autoeditor.logging_utils import get_logger
 from autoeditor.pipeline.job import JobPaths, write_json
@@ -27,12 +28,18 @@ Return only a JSON object that matches the requested schema."""
 
 
 def _user_prompt(scene: Scene) -> str:
-    payload = {
+    payload: dict[str, Any] = {
         "scene_id": scene.scene_id,
         "source_file": scene.source_file,
         "duration_seconds": scene.duration,
         "frames_provided": len(scene.frames),
     }
+    if scene.is_photo:
+        payload["media"] = "photograph"
+        return (
+            "This is a still photograph (not a video frame); the editor will add a slow camera move later, "
+            "so describe the picture itself. Analyze it and return the JSON object.\n" + json.dumps(payload)
+        )
     return (
         "These frames are from one scene (middle frame first, then earlier/later frames if provided). "
         "Analyze the scene and return the JSON object.\n" + json.dumps(payload)
@@ -42,9 +49,10 @@ def _user_prompt(scene: Scene) -> str:
 def heuristic_analysis(scene: Scene) -> dict[str, Any]:
     """Used with --skip-vision: neutral scores, description from the file name."""
     stem = Path(scene.source_file).stem.replace("_", " ").replace("-", " ")
+    what = "Photo" if scene.is_photo else "Scene"
     return {
         "scene_id": scene.scene_id,
-        "description": f"Scene from {stem} ({scene.duration:.1f}s). Vision analysis skipped.",
+        "description": f"{what} from {stem} ({scene.duration:.1f}s). Vision analysis skipped.",
         "subjects": [],
         "objects": [],
         "environment": "",
@@ -62,6 +70,25 @@ def heuristic_analysis(scene: Scene) -> dict[str, Any]:
         "possible_topics": [stem],
         "safe_to_use": True,
     }
+
+
+def photo_framing_analysis(scene: Scene, analysis: dict[str, Any]) -> dict[str, Any]:
+    """Describe a framing of a photo from the analysis of the whole photo.
+
+    Nothing moves in a photograph, so both motion fields read "static"; the move
+    the edit adds is carried by the inventory row's ``framing`` instead (keeping
+    it out of these fields also keeps the near-duplicate grouping honest, which
+    compares content words). Secondary framings (detail, reveal) get a prefix so
+    the writer knows they show part of the same picture.
+    """
+    out = dict(analysis)
+    out["scene_id"] = scene.scene_id
+    out["camera_motion"] = "static"
+    out["subject_motion"] = "static"
+    if not scene.primary_framing:
+        label = FRAMING_LABELS.get(scene.framing or "", "camera move added in the edit")
+        out["description"] = f"{label.capitalize()}: {analysis.get('description', '')}".strip()
+    return out
 
 
 def rejection_reason(analysis: dict[str, Any], cfg: Config) -> str | None:
@@ -93,10 +120,22 @@ def analyze_scenes(
     max_tokens = int(cfg.get("vision.max_tokens", 4000))
     calls = 0
     hits = 0
+    # One vision request per photo: its primary framing is analyzed, the other framings
+    # of the same picture inherit the result (they show a region of the very same image).
+    photo_primary: dict[str, Scene] = {}
     for scene in scenes:
         if skip_vision:
-            scene.analysis = heuristic_analysis(scene)
+            scene.analysis = photo_framing_analysis(scene, heuristic_analysis(scene)) if scene.is_photo else heuristic_analysis(scene)
             scene.rejected_reason = None
+            continue
+        if scene.is_photo and not scene.primary_framing:
+            parent = photo_primary.get(scene.source_file)
+            if parent is None or parent.analysis is None:
+                scene.analysis = None
+                scene.rejected_reason = (parent.rejected_reason if parent else None) or "whole-photo analysis unavailable"
+            else:
+                scene.analysis = photo_framing_analysis(scene, parent.analysis)
+                scene.rejected_reason = parent.rejected_reason
             continue
         frames = [paths.work / f for f in scene.frames][:max_frames]
         frame_hashes = [hash_file(f, fast=False) for f in frames if f.exists()]
@@ -135,6 +174,9 @@ def analyze_scenes(
                 continue
             cache.put(key, analysis)
         analysis["scene_id"] = scene.scene_id
+        if scene.is_photo:
+            analysis = photo_framing_analysis(scene, analysis)
+            photo_primary[scene.source_file] = scene
         scene.analysis = analysis
         scene.rejected_reason = rejection_reason(analysis, cfg)
         if scene.rejected_reason:

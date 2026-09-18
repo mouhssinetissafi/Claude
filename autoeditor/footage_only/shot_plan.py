@@ -28,7 +28,7 @@ from autoeditor.schemas import LLM_SHOT_PLAN_SCHEMA, validate
 
 log = get_logger(__name__)
 
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
 _WORD = re.compile(r"[A-Za-z0-9']+")
 _NUMERIC_CLAIM = re.compile(
     r"(\$\s?\d|\d+(\.\d+)?\s?%|\b(19|20)\d{2}\b|\b\d+(\.\d+)?\s?(mm|cm|inch|inches|grams?|g|kg|lbs?|ounces?|oz|hours?|hrs?|mah|ghz|mhz|gb|tb|mp|megapixels?|nits|fps|million|billion|percent)\b|\b\d{2,}\b)",
@@ -54,6 +54,7 @@ HARD RULES
 11. If there is no topic, infer the most coherent story from the footage and stay strictly within what the visuals show.
 12. overlay_text is optional: 1-3 words in CAPS for a punchy on-screen label, or null. emphasis_words are words that appear verbatim in that line's narration.
 13. ORIGINALITY: this must be an original piece of writing. Do not reproduce, closely paraphrase or lightly reword any article, press release, product page, review or another creator's script. Follow the VARIATION PROFILE so the hook, structure and ending differ from other videos.
+14. PHOTOS: scenes with kind "image" are still photographs; the editor animates them with a slow camera move named by "framing" (pan, push, detail, reveal). Each framing holds about 2-4 seconds, so give a photo line 1-2 framings, not more. Write to what the picture shows and never describe motion, sound or a sequence of events a single photo cannot contain. Spread framings of the same photo across the video instead of stacking them.
 
 Return only the JSON object."""
 
