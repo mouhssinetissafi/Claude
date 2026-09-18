@@ -194,7 +194,11 @@ def run_job(job: DiscoveredJob, cfg: Config, opts: FootageOnlyOptions) -> JobRes
         music, music_credit = select_music(paths, cfg)
         sfx, sfx_credits = select_sfx(paths, cfg, line_starts=[t.start for t in timings])
         tl = build_timeline(script, timings, scenes, inventory, paths, cfg, voice_duration=voice_duration, music=music, sfx=sfx)
-        all_credits = credits + ([music_credit] if music_credit else []) + sfx_credits
+        # Credit only footage that actually appears in the video.
+        used_scene_ids = {seg.get("scene_id") for line in tl["lines"] for seg in line["segments"]}
+        used_files = {s.source_file for s in scenes if s.scene_id in used_scene_ids}
+        footage_credits = [c for c in credits if c.file in used_files]
+        all_credits = footage_credits + ([music_credit] if music_credit else []) + sfx_credits
         write_credits(paths, script["title"], all_credits)
         best = _best_frame(scenes, inventory, paths)
         build_metadata(script, paths, providers.llm, cfg, thumbnail_source=best)

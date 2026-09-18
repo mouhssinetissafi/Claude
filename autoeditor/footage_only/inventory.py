@@ -122,12 +122,14 @@ def build_inventory(scenes: list[Scene], cfg: Config, *, similarity_threshold: f
         strongest.append({"scene_id": row["scene_id"], "score": row["score"], "description": row["description"]})
         if len(strongest) >= 5:
             break
-    if len(strongest) < min(5, len(ranked)):
-        for row in ranked:
+    # Top up from the full ranking so the writer always has a few openers to choose from,
+    # even when near-duplicate grouping collapses everything into one group.
+    for pool in (ranked, sorted(scene_rows, key=lambda r: (-r["score"], r["scene_id"]))):
+        for row in pool:
+            if len(strongest) >= min(5, len(scene_rows)):
+                break
             if all(x["scene_id"] != row["scene_id"] for x in strongest):
                 strongest.append({"scene_id": row["scene_id"], "score": row["score"], "description": row["description"]})
-            if len(strongest) >= 5:
-                break
 
     per_source: dict[str, float] = {}
     for s in usable:

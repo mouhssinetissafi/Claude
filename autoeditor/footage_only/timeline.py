@@ -26,6 +26,8 @@ from autoeditor.schemas import validate
 log = get_logger(__name__)
 
 EPS = 0.02
+# Shortest cut the builder will ever emit; anything smaller is absorbed by its neighbour.
+SLIVER = 0.5
 
 
 @dataclass
@@ -101,9 +103,14 @@ class TimelineBuilder:
         last = self.usage.last_used_at.get(scene_id)
         return last is not None and (at - last) < self.repeat_window
 
+    def _acceptable(self, scene: Scene, need: float, floor: float) -> bool:
+        """A scene can take a segment if it can finish the slot or make a proper-length cut."""
+        remaining = self.usage.remaining(scene)
+        return remaining >= need - EPS or remaining >= floor
+
     def _pick_fallback(self, *, anchors: list[int], at: float, need: float, exclude: set[int]) -> tuple[Scene | None, str]:
         """Apply the fallback chain; return (scene, reason)."""
-        candidates = [s for sid, s in self.scenes.items() if sid not in exclude and self.usage.remaining(s) >= min(need, self.min_seg)]
+        candidates = [s for sid, s in self.scenes.items() if sid not in exclude and self._acceptable(s, need, self.min_seg)]
         # 1. similar, unused scene
         similar_ids: list[int] = []
         for a in anchors:
@@ -125,11 +132,47 @@ class TimelineBuilder:
         outside = [s for s in candidates if not self._recently_used(s.scene_id, at)]
         if outside:
             return max(outside, key=lambda s: self._score(s.scene_id)), "reuse_outside_window"
+        # 3b. short unused remainders of any clip (still a different section, still real footage).
+        leftovers = [s for sid, s in self.scenes.items() if sid not in exclude and self._acceptable(s, need, SLIVER) and self.usage.remaining(s) > EPS]
+        if leftovers:
+            return max(leftovers, key=lambda s: (self.usage.remaining(s), self._score(s.scene_id))), "same_source_section"
         # Reuse inside window as a last resort before stills (never black).
         if candidates:
             self.warnings.append(f"scene reused within {self.repeat_window:.0f}s at {at:.1f}s")
             return min(candidates, key=lambda s: self.usage.last_used_at.get(s.scene_id, -1)), "reuse_in_window"
         return None, "none"
+
+    def _shrink_last(self, segments: list[dict[str, Any]], amount: float) -> float:
+        """Take ``amount`` seconds back from the previous segment; returns what was reclaimed."""
+        if not segments or amount <= 0:
+            return 0.0
+        last = segments[-1]
+        length = last["end"] - last["start"]
+        if length - amount < SLIVER:
+            return 0.0
+        last["end"] = round(last["end"] - amount, 3)
+        if last["type"] == "video":
+            last["source_end"] = round(last["source_end"] - amount, 3)
+            scene_id = last.get("scene_id")
+            if scene_id in self.usage.consumed:
+                self.usage.consumed[scene_id] = max(0.0, self.usage.consumed[scene_id] - amount)
+        return amount
+
+    def _extend_last(self, segments: list[dict[str, Any]], extra: float, at: float) -> bool:
+        """Extend the previous segment by ``extra`` seconds when its source allows it."""
+        if not segments or extra <= 0:
+            return False
+        last = segments[-1]
+        if last["type"] == "image":
+            last["end"] = round(last["end"] + extra, 3)
+            return True
+        scene = self.scenes.get(last.get("scene_id") or -1)
+        if scene is None or last["source_end"] + extra > scene.end_time + EPS:
+            return False
+        last["end"] = round(last["end"] + extra, 3)
+        last["source_end"] = round(last["source_end"] + extra, 3)
+        self.usage.record(scene, extra, at)
+        return True
 
     # ------------------------------------------------------------------ #
     def fill_line(self, line: dict[str, Any], timing: LineTiming) -> list[dict[str, Any]]:
@@ -147,13 +190,21 @@ class TimelineBuilder:
 
         while end - cursor > EPS:
             remaining_slot = end - cursor
+            # Never emit a sliver: stretch the previous segment over a tiny remainder when possible,
+            # otherwise borrow time from it so the closing cut has a proper length.
+            if remaining_slot < SLIVER and segments:
+                if self._extend_last(segments, remaining_slot, cursor):
+                    cursor = end
+                    break
+                borrowed = self._shrink_last(segments, SLIVER - remaining_slot)
+                if borrowed > 0:
+                    cursor = round(cursor - borrowed, 3)
+                    remaining_slot = end - cursor
             scene: Scene | None = None
             fallback: str | None = None
             while queue and scene is None:
                 cand = self.scenes[queue.pop(0)]
-                if self.usage.remaining(cand) >= min(self.min_seg, remaining_slot) - EPS:
-                    scene = cand
-                elif self.usage.remaining(cand) > EPS and remaining_slot <= self.usage.remaining(cand) + EPS:
+                if self._acceptable(cand, remaining_slot, self.min_seg):
                     scene = cand
             if scene is None:
                 scene, fallback = self._pick_fallback(anchors=assigned or list(used_here), at=cursor, need=remaining_slot, exclude=used_here)
@@ -171,12 +222,17 @@ class TimelineBuilder:
             # How long should this segment be?
             planned_share = remaining_slot / (1 + len(queue)) if queue else remaining_slot
             length = min(remaining_slot, self.usage.remaining(scene), max(planned_share, self.min_seg))
-            if remaining_slot - length < self.min_seg and remaining_slot - length > EPS and self.usage.remaining(scene) >= remaining_slot:
+            if remaining_slot - length < self.min_seg and remaining_slot - length > EPS and self.usage.remaining(scene) >= remaining_slot - EPS:
                 length = remaining_slot  # avoid a tiny leftover cut
             # Strong footage may hold longer; ordinary footage is split at max_seg.
             if length > self.max_seg and scene.scene_id not in self.strongest and len(self.scenes) > 1:
                 length = self.max_seg
-            length = round(max(length, min(remaining_slot, 0.4)), 3)
+            length = round(min(length, remaining_slot, self.usage.remaining(scene)), 3)
+            if length <= EPS:
+                # Candidate has nothing left (should not happen); fall through to a still frame.
+                segments.append(_still_segment(scene, start=cursor, length=remaining_slot, transition=self.transition))
+                cursor = end
+                break
             offset = self.usage.consumed.get(scene.scene_id, 0.0)
             segments.append(_segment(scene, start=cursor, length=length, offset=offset, transition=self.transition, fallback=fallback))
             self.usage.record(scene, length, cursor)
@@ -231,16 +287,13 @@ def build_timeline(
     total = round(max(voice_duration, timings[-1].end if timings else 0.0) + outro, 3)
     # Extend the final segment through the outro so the tail is never black.
     if lines_out and lines_out[-1]["segments"]:
-        last = lines_out[-1]["segments"][-1]
+        segments = lines_out[-1]["segments"]
+        last = segments[-1]
         extra = round(total - last["end"], 3)
-        if extra > 0:
+        if extra > 0 and not builder._extend_last(segments, extra, last["end"]):
             scene = builder.scenes.get(last.get("scene_id") or -1)
-            if last["type"] == "video" and scene is not None and last["source_end"] + extra <= scene.end_time + EPS:
-                last["end"] = total
-                last["source_end"] = round(last["source_end"] + extra, 3)
-            else:
-                anchor = scene or builder.scenes[(builder.strongest or list(builder.scenes))[0]]
-                lines_out[-1]["segments"].append(_still_segment(anchor, start=last["end"], length=extra, transition=builder.transition))
+            anchor = scene or builder.scenes[(builder.strongest or list(builder.scenes))[0]]
+            segments.append(_still_segment(anchor, start=last["end"], length=extra, transition=builder.transition))
         lines_out[-1]["end"] = total
 
     timeline = {
