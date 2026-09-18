@@ -165,6 +165,13 @@ branding:
   opacity: 0.85
   margin: 24                       # extra inset from the safe-zone edge (px)
 
+style:
+  enabled: true                    # consult the house-style profile (config/references.yaml + measured stats)
+  references_config: "config/references.yaml"
+  stats_path: "cache/references/stats.json"          # fetched with: python run.py --references refresh
+  profile_path: "cache/references/style_profile.json"
+  annotations_dir: "references/annotations"
+
 originality:
   enabled: true
   registry_path: "cache/originality_registry.json"   # remembers every produced script across jobs

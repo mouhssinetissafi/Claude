@@ -44,6 +44,7 @@ from autoeditor.pipeline.voice import LineTiming, build_voice, load_voice_timing
 from autoeditor.providers.base import TTSProvider
 from autoeditor.providers.factory import build_providers
 from autoeditor.providers.mock import MockTTS
+from autoeditor.style.profile import apply_to_config, influence_lines, load_or_build_profile, prompt_block
 
 log = get_logger(__name__)
 
@@ -170,6 +171,17 @@ def _run_stages(job: DiscoveredJob, cfg: Config, opts: FootageOnlyOptions, paths
     if opts.skip_voice:
         tts = MockTTS(words_per_second=policy.words_per_second)
 
+    # House style: weighted evidence from high-performing references (or the editorial baseline).
+    style = load_or_build_profile(cfg)
+    style_changes = apply_to_config(style, cfg)
+    for change in style_changes:
+        log.info("house style: %s", change)
+    house_style = prompt_block(style) or None
+    style_notes = influence_lines(style)
+    if style is not None:
+        write_json(paths.work / "style_profile.json", {**style, "applied_config_changes": style_changes})
+    log.info("House style: %s", style_notes[0] if style_notes else "disabled")
+
     # Phase 1 -------------------------------------------------------------
     def discovered() -> dict[str, Any]:
         doc = job.to_dict()
@@ -213,7 +225,9 @@ def _run_stages(job: DiscoveredJob, cfg: Config, opts: FootageOnlyOptions, paths
     def make_script(attempt: int) -> dict[str, Any]:
         variation = variation_profile(f"{job.name}|{job.topic or ''}|{','.join(footage_signature)}", attempt=attempt)
         opener_hint = strongest[(int(variation["opener_rotation"]) + attempt) % len(strongest)] if strongest else None
-        script = generate_shot_plan(inventory, job.topic, providers.llm, cfg, paths, cache=llm_cache, variation=variation, opener_hint=opener_hint)
+        script = generate_shot_plan(
+            inventory, job.topic, providers.llm, cfg, paths, cache=llm_cache, variation=variation, opener_hint=opener_hint, house_style=house_style
+        )
         # Estimate-based expansion before spending on TTS.
         while (
             narration_shortfall(estimate_seconds(script["lines"], policy.words_per_second) + policy.outro_seconds, policy) > 0
@@ -221,7 +235,15 @@ def _run_stages(job: DiscoveredJob, cfg: Config, opts: FootageOnlyOptions, paths
         ):
             est = estimate_seconds(script["lines"], policy.words_per_second)
             longer = expand_shot_plan(
-                script, inventory, providers.llm, cfg, paths, current_seconds=est, add_seconds=expansion_target(est, policy), cache=llm_cache
+                script,
+                inventory,
+                providers.llm,
+                cfg,
+                paths,
+                current_seconds=est,
+                add_seconds=expansion_target(est, policy),
+                cache=llm_cache,
+                house_style=house_style,
             )
             if longer is None:
                 break
@@ -252,7 +274,15 @@ def _run_stages(job: DiscoveredJob, cfg: Config, opts: FootageOnlyOptions, paths
     while narration_shortfall(voice_duration + policy.outro_seconds, policy) > 0 and int(script.get("expansions", 0)) < policy.max_expansions:
         log.info("Narration is %.1fs; minimum is %.0fs - asking the writer for more useful context", voice_duration, policy.min_final_seconds)
         longer = expand_shot_plan(
-            script, inventory, providers.llm, cfg, paths, current_seconds=voice_duration, add_seconds=expansion_target(voice_duration, policy), cache=llm_cache
+            script,
+            inventory,
+            providers.llm,
+            cfg,
+            paths,
+            current_seconds=voice_duration,
+            add_seconds=expansion_target(voice_duration, policy),
+            cache=llm_cache,
+            house_style=house_style,
         )
         if longer is None:
             break
@@ -300,7 +330,7 @@ def _run_stages(job: DiscoveredJob, cfg: Config, opts: FootageOnlyOptions, paths
         )
         if registry is not None:
             registry.record(job.name, script_fingerprint(script), footage_signature, title=script["title"], variation=script.get("variation"))
-        write_review(_review_info(job, script, tl, policy, license_warnings, originality, disclosure, state, qc=None), paths)
+        write_review(_review_info(job, script, tl, policy, license_warnings, originality, disclosure, state, qc=None, style=style_notes), paths)
         return tl
 
     timeline = state.run_stage("timeline_ready", timeline_ready, skip_if_done=lambda: read_json(paths.timeline_json))
@@ -345,12 +375,15 @@ def _run_stages(job: DiscoveredJob, cfg: Config, opts: FootageOnlyOptions, paths
                 metadata.get("ai_disclosure"),
                 state,
                 qc=read_json(paths.qc_json) if paths.qc_json.exists() else None,
+                style=style_notes,
             ),
             paths,
         )
         state.finish("needs_review")
         return JobResult(name=job.name, status="needs_review", final=final, message=str(exc.cause))
-    write_review(_review_info(job, script, timeline, policy, license_warnings, originality, metadata.get("ai_disclosure"), state, qc=qc_result), paths)
+    write_review(
+        _review_info(job, script, timeline, policy, license_warnings, originality, metadata.get("ai_disclosure"), state, qc=qc_result, style=style_notes), paths
+    )
 
     # Human approval gate + upload (never automatic) ------------------------------
     approved, approval_note = approval_status(paths)
@@ -399,6 +432,7 @@ def _review_info(
     state: JobState,
     *,
     qc: dict[str, Any] | None,
+    style: list[str] | None = None,
 ) -> ReviewInfo:
     return ReviewInfo(
         job=job.name,
@@ -412,6 +446,7 @@ def _review_info(
         qc=qc,
         variation=script.get("variation"),
         warnings=[w["message"] for w in state.data.get("warnings", [])],
+        style_influences=list(style or []),
     )
 
 

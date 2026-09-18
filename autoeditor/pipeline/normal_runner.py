@@ -35,6 +35,7 @@ from autoeditor.pipeline.voice import build_voice, load_voice_timing
 from autoeditor.providers.base import TTSProvider
 from autoeditor.providers.factory import build_providers
 from autoeditor.providers.mock import MockTTS
+from autoeditor.style.profile import apply_to_config, influence_lines, load_or_build_profile, prompt_block
 
 log = get_logger(__name__)
 
@@ -91,17 +92,36 @@ def _run_stages(name: str, cfg: Config, opts: NormalOptions, paths: JobPaths, st
     if opts.skip_voice:
         tts = MockTTS(words_per_second=policy.words_per_second)
 
+    style = load_or_build_profile(cfg)
+    style_changes = apply_to_config(style, cfg)
+    for change in style_changes:
+        log.info("house style: %s", change)
+    house_style = prompt_block(style) or None
+    style_notes = influence_lines(style)
+    if style is not None:
+        write_json(paths.work / "style_profile.json", {**style, "applied_config_changes": style_changes})
+
     state.run_stage("discovered", lambda: None, skip_if_done=lambda: None)
 
     def make_script(attempt: int) -> dict[str, Any]:
         variation = variation_profile(f"{name}|{opts.topic}", attempt=attempt)
-        script = write_script(opts.topic, facts, providers.llm, cfg, paths, cache=llm_cache, variation=variation)
+        script = write_script(opts.topic, facts, providers.llm, cfg, paths, cache=llm_cache, variation=variation, house_style=house_style)
         while (
             narration_shortfall(estimate_seconds(script["lines"], policy.words_per_second) + policy.outro_seconds, policy) > 0
             and int(script.get("expansions", 0)) < policy.max_expansions
         ):
             est = estimate_seconds(script["lines"], policy.words_per_second)
-            longer = expand_script(script, facts, providers.llm, cfg, paths, current_seconds=est, add_seconds=expansion_target(est, policy), cache=llm_cache)
+            longer = expand_script(
+                script,
+                facts,
+                providers.llm,
+                cfg,
+                paths,
+                current_seconds=est,
+                add_seconds=expansion_target(est, policy),
+                cache=llm_cache,
+                house_style=house_style,
+            )
             if longer is None:
                 break
             script = longer
@@ -127,7 +147,15 @@ def _run_stages(name: str, cfg: Config, opts: NormalOptions, paths: JobPaths, st
     voice_duration = audio_duration(paths.voice_audio)
     while narration_shortfall(voice_duration + policy.outro_seconds, policy) > 0 and int(script.get("expansions", 0)) < policy.max_expansions:
         longer = expand_script(
-            script, facts, providers.llm, cfg, paths, current_seconds=voice_duration, add_seconds=expansion_target(voice_duration, policy), cache=llm_cache
+            script,
+            facts,
+            providers.llm,
+            cfg,
+            paths,
+            current_seconds=voice_duration,
+            add_seconds=expansion_target(voice_duration, policy),
+            cache=llm_cache,
+            house_style=house_style,
         )
         if longer is None:
             break
@@ -166,7 +194,7 @@ def _run_stages(name: str, cfg: Config, opts: NormalOptions, paths: JobPaths, st
         )
         if registry is not None:
             registry.record(name, script_fingerprint(script), [], title=script["title"], variation=script.get("variation"))
-        write_review(_info(name, script, tl, policy, license_warnings, originality, disclosure, state, qc=None), paths)
+        write_review(_info(name, script, tl, policy, license_warnings, originality, disclosure, state, qc=None, style=style_notes), paths)
         return tl
 
     timeline = state.run_stage("timeline_ready", timeline_ready, skip_if_done=lambda: read_json(paths.timeline_json))
@@ -196,10 +224,14 @@ def _run_stages(name: str, cfg: Config, opts: NormalOptions, paths: JobPaths, st
     try:
         qc_result = state.run_stage("qc_passed", qc, skip_if_done=lambda: read_json(paths.qc_json))
     except StageError:
-        write_review(_info(name, script, timeline, policy, license_warnings, originality, metadata.get("ai_disclosure"), state, qc=None), paths)
+        write_review(
+            _info(name, script, timeline, policy, license_warnings, originality, metadata.get("ai_disclosure"), state, qc=None, style=style_notes), paths
+        )
         state.finish("needs_review")
         return "needs_review"
-    write_review(_info(name, script, timeline, policy, license_warnings, originality, metadata.get("ai_disclosure"), state, qc=qc_result), paths)
+    write_review(
+        _info(name, script, timeline, policy, license_warnings, originality, metadata.get("ai_disclosure"), state, qc=qc_result, style=style_notes), paths
+    )
 
     approved, approval_note = approval_status(paths)
     allowed, why = upload_allowed(cfg, requested=opts.upload, qc_passed=True, approved=approved)
@@ -230,7 +262,7 @@ def _check(registry: OriginalityRegistry | None, name: str, script: dict[str, An
     )
 
 
-def _info(name, script, timeline, policy, license_warnings, originality, disclosure, state, *, qc):  # type: ignore[no-untyped-def]
+def _info(name, script, timeline, policy, license_warnings, originality, disclosure, state, *, qc, style=None):  # type: ignore[no-untyped-def]
     return ReviewInfo(
         job=name,
         title=script["title"],
@@ -243,4 +275,5 @@ def _info(name, script, timeline, policy, license_warnings, originality, disclos
         qc=qc,
         variation=script.get("variation"),
         warnings=[w["message"] for w in state.data.get("warnings", [])],
+        style_influences=list(style or []),
     )

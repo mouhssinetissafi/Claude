@@ -1,0 +1,19 @@
+{
+  "handle": "",
+  "observed_by": "",
+  "observed_at": "",
+  "videos": [
+    {
+      "video_id": "",
+      "hook_type": "",
+      "first_visual_seconds": null,
+      "avg_cut_seconds": null,
+      "caption_style": "",
+      "emphasis": "",
+      "visual_density": "",
+      "structure": "",
+      "payoff": "",
+      "notes": ""
+    }
+  ]
+}

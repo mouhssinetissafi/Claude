@@ -66,6 +66,7 @@ def build_user_prompt(
     variation: dict[str, Any] | None = None,
     opener_hint: int | None = None,
     expand: dict[str, Any] | None = None,
+    house_style: str | None = None,
 ) -> str:
     policy = policy_from_config(cfg)
     total = float(inventory.get("total_usable_seconds", 0))
@@ -86,6 +87,8 @@ def build_user_prompt(
         payload["expand"] = expand
     intro = f"TOPIC: {topic}\n" if topic else "TOPIC: none provided - infer the story from the footage; do not invent facts.\n"
     intro += "No research/source module supplied verified facts for this job (verified_sources is empty).\n"
+    if house_style:
+        intro += house_style + "\n"
     if variation:
         intro += variation_instruction(variation) + "\n"
     if expand:
@@ -254,11 +257,12 @@ def generate_shot_plan(
     force: bool = False,
     variation: dict[str, Any] | None = None,
     opener_hint: int | None = None,
+    house_style: str | None = None,
 ) -> dict[str, Any]:
     """Call the LLM, validate, repair and write script.json."""
     if not inventory.get("usable_scenes"):
         raise ProviderError("no usable scenes in inventory; cannot write a script")
-    user = build_user_prompt(inventory, topic, cfg, variation=variation, opener_hint=opener_hint)
+    user = build_user_prompt(inventory, topic, cfg, variation=variation, opener_hint=opener_hint, house_style=house_style)
     plan = _call_llm(llm, user, cfg, cache, force=force)
     repaired, notes = repair_plan(plan, inventory, cfg, opener_hint=opener_hint)
     for note in notes:
@@ -276,6 +280,7 @@ def expand_shot_plan(
     current_seconds: float,
     add_seconds: float,
     cache: JsonCache | None = None,
+    house_style: str | None = None,
 ) -> dict[str, Any] | None:
     """Ask the writer to add useful context; returns the longer script, or None if it did not grow."""
     variation = script.get("variation")
@@ -290,7 +295,7 @@ def expand_shot_plan(
         "current_seconds": round(current_seconds, 1),
         "add_seconds": round(add_seconds, 1),
     }
-    user = build_user_prompt(inventory, script.get("topic"), cfg, variation=variation, opener_hint=opener_hint, expand=expand)
+    user = build_user_prompt(inventory, script.get("topic"), cfg, variation=variation, opener_hint=opener_hint, expand=expand, house_style=house_style)
     plan = _call_llm(llm, user, cfg, cache, force=False)
     repaired, notes = repair_plan(plan, inventory, cfg, opener_hint=opener_hint)
     for note in notes:

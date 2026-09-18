@@ -40,6 +40,7 @@ class ReviewInfo:
     qc: dict[str, Any] | None = None
     variation: dict[str, Any] | None = None
     warnings: list[str] = field(default_factory=list)
+    style_influences: list[str] = field(default_factory=list)
 
 
 def ai_disclosure(credits: list[SourceCredit]) -> dict[str, Any]:
@@ -107,6 +108,8 @@ def render_review(info: ReviewInfo, paths: JobPaths) -> str:
             lines.append(f"  - [ ] {f}")
     if info.warnings:
         lines += ["", "## 5. Warnings", ""] + [f"- {w}" for w in info.warnings]
+    if info.style_influences:
+        lines += ["", "## 6. Style influences (which references shaped this video, and why)", ""] + [f"- {s}" for s in info.style_influences]
     lines += [
         "",
         "## Approve",

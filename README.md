@@ -189,6 +189,26 @@ They do **not** try to hide AI involvement or evade any detection.
   YouTube "altered or synthetic content" disclosure may be required. AI used
   only for scripting, captions or editing assistance is not flagged.
 
+## 6d. Style references (high-performance house style)
+
+`config/references.yaml` registers candidate channels; measured Shorts
+performance (never subscriber counts) decides their influence:
+
+```bash
+export YOUTUBE_API_KEY=...
+python run.py --references refresh   # fetch public stats, tier the channels, rebuild the profile
+python run.py --references report    # see tiers, weights, who is active and why
+```
+
+High tier (5M+ window views, several 1M+ Shorts, very strong median or
+repeated outliers) gets full weight; medium gets half; weak, stale, unverified
+or research-only channels are excluded. At most six references are active.
+Human notes on outperforming videos in `references/annotations/` adjust cut
+cadence, caption grouping and hook guidance within safe bounds. Every job logs
+its influences in `work/<job>/style_profile.json` and `REVIEW.md`. Until stats
+are fetched the profile is the editorial baseline only and says so. Details:
+[docs/STYLE_REFERENCES.md](docs/STYLE_REFERENCES.md).
+
 ## 7. Troubleshooting
 
 | Symptom | Fix |

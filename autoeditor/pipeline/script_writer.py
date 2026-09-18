@@ -48,6 +48,7 @@ def build_user_prompt(
     *,
     variation: dict[str, Any] | None = None,
     expand: dict[str, Any] | None = None,
+    house_style: str | None = None,
 ) -> str:
     policy = policy_from_config(cfg)
     payload: dict[str, Any] = {
@@ -61,7 +62,8 @@ def build_user_prompt(
     }
     if expand:
         payload["expand"] = expand
-    intro = variation_instruction(variation) + "\n" if variation else ""
+    intro = (house_style + "\n") if house_style else ""
+    intro += variation_instruction(variation) + "\n" if variation else ""
     if expand:
         intro += expansion_instruction(float(expand["current_seconds"]), float(expand["add_seconds"]), policy) + "\n"
         return intro + "Revise and expand the existing script. Input JSON:\n" + json.dumps(payload, ensure_ascii=False)
@@ -151,8 +153,9 @@ def write_script(
     *,
     cache: JsonCache | None = None,
     variation: dict[str, Any] | None = None,
+    house_style: str | None = None,
 ) -> dict[str, Any]:
-    user = build_user_prompt(topic, facts, cfg, variation=variation)
+    user = build_user_prompt(topic, facts, cfg, variation=variation, house_style=house_style)
     plan = _call_llm(llm, user, cfg, cache)
     return _plan_to_script(plan, topic, facts, cfg, paths, variation=variation, expansions=0)
 
@@ -167,6 +170,7 @@ def expand_script(
     current_seconds: float,
     add_seconds: float,
     cache: JsonCache | None = None,
+    house_style: str | None = None,
 ) -> dict[str, Any] | None:
     """Ask the writer to add useful context; returns the longer script, or None if it did not grow."""
     topic = str(script.get("topic") or "")
@@ -180,7 +184,7 @@ def expand_script(
         "current_seconds": round(current_seconds, 1),
         "add_seconds": round(add_seconds, 1),
     }
-    user = build_user_prompt(topic, facts, cfg, variation=script.get("variation"), expand=expand)
+    user = build_user_prompt(topic, facts, cfg, variation=script.get("variation"), expand=expand, house_style=house_style)
     plan = _call_llm(llm, user, cfg, cache)
     wps = float(cfg.get("script.words_per_second", 2.6))
     before = estimate_seconds(script["lines"], wps)

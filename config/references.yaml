@@ -1,0 +1,102 @@
+# Style reference registry for the Tech Shorts house style.
+#
+# Nothing here is a ranking. Channels are *candidates*; their influence is decided
+# by measured Shorts performance fetched with `python run.py --references refresh`
+# (needs YOUTUBE_API_KEY) and re-evaluated whenever the stats go stale.
+# Subscriber counts are never used as a signal.
+
+version: 1
+
+performance:
+  recent_days: 28              # window for "recent" views and the 28-day estimate
+  shorts_max_seconds: 180      # videos at or under this length count as Shorts
+  sample_size: 20              # latest N uploads examined per channel
+  min_shorts_sample: 5         # fewer recent Shorts than this = insufficient data (excluded)
+  stale_after_days: 45         # stats older than this must be refreshed before they count
+  strong:                      # ANY signal met = high influence
+    views_28d: 5000000         # views on Shorts published in the last 28 days (public lower bound)
+    viral_video_views: 1000000
+    viral_videos_min: 3        # "several" recent Shorts over viral_video_views
+    median_views: 500000       # very strong median across the latest sample
+    outlier_ratio: 3.0         # a Short at >= 3x the creator's median is an outlier
+    outlier_min_count: 2       # "repeated" outliers
+    outlier_median_floor: 20000  # outliers only count when the baseline itself is not tiny
+  medium:                      # ANY signal met = medium influence
+    views_28d: 1000000
+    viral_videos_min: 1
+    median_views: 150000
+    outlier_min_count: 1
+  weights:
+    high: 1.0
+    medium: 0.5
+    low: 0.0                   # excluded from the active profile
+  provisional_weight_user_verified: 0.6   # used ONLY while no stats have ever been fetched
+  max_active_references: 6     # better 5 excellent references than 20 mediocre ones
+  video_top_outlier_ratio: 2.0 # within a channel, videos at >= 2x median are "top performers"
+
+# role: style     -> may shape the fast-cut Shorts editing style (if performance justifies it)
+# role: research  -> narrative/research reference; never shapes editing style unless its own
+#                    Shorts performance is tier "high"
+# trust: user_verified_strong -> the operator vouches for recent strong performance; gets a
+#                                provisional weight until real stats exist, then stats decide
+# trust: unverified           -> excluded until stats prove performance
+channels:
+  - handle: Mrwhosetheboss
+    url: https://www.youtube.com/@Mrwhosetheboss/shorts
+    role: style
+    trust: user_verified_strong
+  - handle: mkbhd
+    url: https://www.youtube.com/@mkbhd/shorts
+    role: style
+    trust: user_verified_strong
+  - handle: KyleKrueger
+    url: https://www.youtube.com/@KyleKrueger/shorts
+    role: style
+    trust: user_verified_strong
+  - handle: TechnicalGuruji
+    url: https://www.youtube.com/@TechnicalGuruji/shorts
+    role: style
+    trust: user_verified_strong
+  - handle: OmarDizer
+    url: https://www.youtube.com/@OmarDizer/shorts
+    role: style
+    trust: user_verified_strong
+  - {handle: beebomco, url: https://www.youtube.com/@beebomco/shorts, role: style, trust: unverified}
+  - {handle: atolethros, url: https://www.youtube.com/@atolethros/shorts, role: style, trust: unverified}
+  - {handle: DIDIEDITZ1, url: https://www.youtube.com/@DIDIEDITZ1/shorts, role: style, trust: unverified}
+  - {handle: Tech_Comparison1, url: https://www.youtube.com/@Tech_Comparison1/shorts, role: style, trust: unverified}
+  - {handle: Tech_xrn, url: https://www.youtube.com/@Tech_xrn/shorts, role: style, trust: unverified}
+  - {handle: ziadpro, url: https://www.youtube.com/@ziadpro/shorts, role: style, trust: unverified}
+  - {handle: chinntutech, url: https://www.youtube.com/@chinntutech/shorts, role: style, trust: unverified}
+  - {handle: MichaelColeman03, url: https://www.youtube.com/@MichaelColeman03/shorts, role: style, trust: unverified}
+  - {handle: Techno_Craz, url: https://www.youtube.com/@Techno_Craz/shorts, role: style, trust: unverified}
+  - {handle: TechSimplyHub, url: https://www.youtube.com/@TechSimplyHub/shorts, role: style, trust: unverified}
+  - {handle: Zohaibhassanqureshi, url: https://www.youtube.com/@Zohaibhassanqureshi/shorts, role: style, trust: unverified}
+  - {handle: SimplifiedThings, url: https://www.youtube.com/@SimplifiedThings/shorts, role: style, trust: unverified}
+  - {handle: TechnoBuzzNetShorts, url: https://www.youtube.com/@TechnoBuzzNetShorts/shorts, role: style, trust: unverified}
+  - {handle: ShoortsVideo, url: https://www.youtube.com/@ShoortsVideo/shorts, role: style, trust: unverified}
+  - {handle: TechBitsCentral, url: https://www.youtube.com/@TechBitsCentral/shorts, role: style, trust: unverified}
+  - {handle: SillycornsMedia, url: https://www.youtube.com/@SillycornsMedia/shorts, role: style, trust: unverified}
+  - {handle: TechAltar, url: https://www.youtube.com/@TechAltar/videos, role: research, trust: unverified}
+  - {handle: ColdFusion, url: https://www.youtube.com/@ColdFusion/videos, role: research, trust: unverified}
+
+# Editorial baseline: principles the house style always starts from. Evidence from
+# active references adjusts and annotates them; it never replaces editorial judgment.
+house_style:
+  principles:
+    - "Open on the strongest visual and a concrete claim in the first two seconds; no throat-clearing."
+    - "Show visual evidence for every claim immediately; the footage proves the line."
+    - "Cut when the idea changes, not on a clock; hold strong footage, shorten weak footage."
+    - "Keep product footage premium: stable, well-exposed, tight punch-ins and reframes for detail."
+    - "High visual density without chaos: one clear subject per shot, one idea per line."
+    - "Captions stay readable: short word groups, selective emphasis on the words that carry the idea."
+    - "Progress curiosity: each line earns the next; set up a question and pay it off."
+    - "Use pattern interrupts (angle change, overlay, scale change) when attention would otherwise sag."
+    - "B-roll must mean something; never decorative filler."
+    - "Deliver a real payoff, then stop; minimal filler, clean loopable ending."
+    - "Original script and timeline every time; references are evidence, never templates."
+  defaults:
+    target_segment_seconds: 2.2
+    min_segment_seconds: 1.2
+    max_segment_seconds: 4.5
+    max_words_per_caption: 4

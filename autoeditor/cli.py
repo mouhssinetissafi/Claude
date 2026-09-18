@@ -34,6 +34,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-duration", type=float, default=None, help="Target maximum narration seconds (script.target_max_seconds)")
     p.add_argument("--theme", default=None, help="Remotion theme name (render.theme)")
 
+    refs = p.add_argument_group("style references (config/references.yaml)")
+    refs.add_argument(
+        "--references",
+        choices=["refresh", "report", "profile", "import"],
+        default=None,
+        help="refresh = fetch public Shorts statistics (needs YOUTUBE_API_KEY); report = show tiers; profile = rebuild the house-style profile; import = load a manual stats JSON",
+    )
+    refs.add_argument("--references-file", type=Path, default=None, help="JSON file for --references import")
+    refs.add_argument("--references-only", nargs="*", default=None, help="Limit --references refresh to these handles")
+
     mode = p.add_argument_group("normal mode")
     mode.add_argument("--topic", default=None, help="Topic to write about")
     mode.add_argument("--topic-file", type=Path, default=None, help="File whose contents are the topic")
@@ -68,6 +78,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     if cfg.mock:
         log.info("Mock mode: no external APIs will be called")
+    if args.references:
+        from autoeditor.style.cli import run as run_references
+
+        return run_references(args.references, cfg, import_path=args.references_file, only=args.references_only)
 
     try:
         if args.footage_only:
