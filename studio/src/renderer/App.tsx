@@ -33,9 +33,6 @@ export const App: React.FC = () => {
   const [previewProps, setPreviewProps] = useState<ShortProps | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>('');
-  const [newProjectOpen, setNewProjectOpen] = useState(false);
-  const [newProjectName, setNewProjectName] = useState('My First Short');
-  const [newProjectError, setNewProjectError] = useState('');
 
   useEffect(() => {
     void window.studio.credentialStatus().then(setCredentials).catch(() => undefined);
@@ -63,27 +60,13 @@ export const App: React.FC = () => {
     try { await fn(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
 
-  // Electron does not implement window.prompt() (it throws "prompt() is not supported."),
-  // so the project name is asked for in an in-app dialog instead.
   const newProject = (): void => {
-    setNewProjectError('');
-    setNewProjectOpen(true);
-  };
-
-  const createProject = async (): Promise<void> => {
-    const name = newProjectName.trim();
-    if (!name) { setNewProjectError('Enter a project name.'); return; }
-    setBusy(true);
-    setNewProjectError('');
-    try {
+    const name = window.prompt('Project name', 'My First Short');
+    if (!name) return;
+    void run(async () => {
       const created = await window.studio.newProject(name);
-      if (created) { setNewProjectOpen(false); setProject(created); setJob(null); setLogs([]); setFinalUrl(''); setPreviewProps(null); }
-    } catch (e) {
-      const reason = (e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']*': (Error: )?/, '');
-      setNewProjectError(`Could not create the project. ${reason}`);
-    } finally {
-      setBusy(false);
-    }
+      if (created) { setProject(created); setJob(null); setLogs([]); setFinalUrl(''); setPreviewProps(null); }
+    });
   };
 
   const openProject = (): void => {
@@ -157,7 +140,6 @@ export const App: React.FC = () => {
         <button className="settings-link" onClick={() => setSettingsOpen(true)}>API settings</button>
         {error ? <div className="error-banner">{error}</div> : null}
         {settingsOpen ? <CredentialsModal {...{credentials, anthropicKey, setAnthropicKey, elevenKey, setElevenKey, voiceId, setVoiceId, saveSecrets, close: () => setSettingsOpen(false)}} /> : null}
-        {newProjectOpen ? <NewProjectModal name={newProjectName} setName={setNewProjectName} error={newProjectError} busy={busy} create={() => void createProject()} close={() => setNewProjectOpen(false)} /> : null}
       </div>
     );
   }
@@ -280,18 +262,6 @@ const JobCard: React.FC<{job: StudioJob; logs: string[]; onCancel: () => void; o
     <div className="job-actions">
       {['running','queued'].includes(job.status) ? <button onClick={onCancel}>Cancel</button> : null}
       {job.final_path ? <button className="primary" onClick={onReveal}>Show final video</button> : null}
-    </div>
-  </div>
-);
-
-const NewProjectModal: React.FC<{name: string; setName: (v: string) => void; error: string; busy: boolean; create: () => void; close: () => void}> = (p) => (
-  <div className="modal-backdrop" onMouseDown={p.busy ? undefined : p.close}>
-    <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
-      <div className="modal-head"><h2>New project</h2><button className="icon-button" onClick={p.close} disabled={p.busy}>×</button></div>
-      <p>Next you choose the folder where the project will be created.</p>
-      <label>Project name <input autoFocus value={p.name} onChange={(e) => p.setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !p.busy) p.create(); }} /></label>
-      {p.error ? <div className="error-banner" role="alert">{p.error}</div> : null}
-      <div className="modal-actions"><button onClick={p.close} disabled={p.busy}>Cancel</button><button className="primary" onClick={p.create} disabled={p.busy}>{p.busy ? 'Creating…' : 'Create project'}</button></div>
     </div>
   </div>
 );
