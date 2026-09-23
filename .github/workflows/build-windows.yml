@@ -1,15 +1,25 @@
 name: Build Windows Studio Installer
 
-# DIAGNOSTIC VERSION on branch claude/auto-editor-footage-only-8chriw only.
-# Reproduces the engine ping check from scripts/build_studio_windows.ps1 and
-# records the exact bytes involved. main keeps the real workflow.
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'autoeditor/**'
+      - 'studio/**'
+      - 'remotion/**'
+      - 'packaging/**'
+      - 'scripts/build_studio_windows.ps1'
+      - 'studio_engine.py'
+      - 'pyproject.toml'
+      - 'config/**'
+      - 'assets/**'
+      - '.github/workflows/build-windows.yml'
 
 jobs:
-  diagnose-ping:
+  build-windows:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -18,49 +28,22 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
-      - name: Encoding facts
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Continue'
-          "PowerShell: $($PSVersionTable.PSVersion)"
-          "OutputEncoding (default): $($OutputEncoding.WebName) preamble bytes=$($OutputEncoding.GetPreamble().Length)"
-          "Console InputEncoding: $([Console]::InputEncoding.WebName)  OutputEncoding: $([Console]::OutputEncoding.WebName)"
-          python -c "import locale; print('python preferred encoding:', locale.getpreferredencoding(False))"
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: remotion/package-lock.json
 
-      - name: Bytes PowerShell pipes into a program (default OutputEncoding)
+      - name: Build installer on Windows
         shell: powershell
-        run: |
-          $ErrorActionPreference = 'Continue'
-          '{"id":1,"method":"ping","params":{}}' | python diag/dump_stdin.py
+        run: ./scripts/build_studio_windows.ps1 -SkipPrerequisiteInstall -SkipTests
 
-      - name: Bytes PowerShell pipes into a program (UTF-8 without BOM, as the script now sets)
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Continue'
-          $OutputEncoding = New-Object System.Text.UTF8Encoding $false
-          '{"id":1,"method":"ping","params":{}}' | python diag/dump_stdin.py
-
-      - name: Build engine exactly as the script does
-        shell: powershell
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]" pyinstaller
-          python -m PyInstaller --noconfirm --clean packaging/autoeditor_engine.spec
-          if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
-
-      - name: Engine ping through PowerShell (every output line)
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Continue'
-          $OutputEncoding = New-Object System.Text.UTF8Encoding $false
-          $lines = '{"id":1,"method":"ping","params":{}}' | & dist/autoeditor-engine.exe 2>&1
-          $i = 0
-          foreach ($line in $lines) { $i++; "line $i : $line" }
-          "exit code: $LASTEXITCODE"
-
-      - name: Engine ping with exact bytes (no PowerShell pipe)
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Continue'
-          python diag/engine_probe.py dist/autoeditor-engine.exe
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Auto-Editor-PRO-Studio-Windows
+          path: release/Auto-Editor-PRO-Studio-Setup.exe
+          if-no-files-found: error
