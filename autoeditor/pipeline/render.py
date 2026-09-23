@@ -108,8 +108,9 @@ def render_video(paths: JobPaths, cfg: Config, props: dict[str, Any], *, output:
     write_json(paths.render_props_json, props)
     entry = str(cfg.get("render.entry", "src/index.ts"))
     composition = str(cfg.get("render.composition", "Short"))
+    npx = os.environ.get("AUTOEDITOR_NPX", "").strip() or shutil.which("npx.cmd" if os.name == "nt" else "npx") or "npx"
     cmd = [
-        "npx",
+        npx,
         "remotion",
         "render",
         entry,

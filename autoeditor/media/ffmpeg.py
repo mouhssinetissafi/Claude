@@ -8,6 +8,7 @@ parsers (``parse_blackdetect``, ``parse_silencedetect``, ``parse_volumedetect``,
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -24,15 +25,25 @@ class FFmpegError(RuntimeError):
     """ffmpeg exited with an error."""
 
 
+def _ffmpeg_binary() -> str | None:
+    explicit = os.environ.get("AUTOEDITOR_FFMPEG", "").strip()
+    if explicit and Path(explicit).exists():
+        return explicit
+    return shutil.which("ffmpeg")
+
+
 def ffmpeg_available() -> bool:
-    return shutil.which("ffmpeg") is not None
+    return _ffmpeg_binary() is not None
 
 
 def run_ffmpeg(args: Sequence[str], *, timeout: int = 1800, description: str = "ffmpeg") -> str:
     """Run ffmpeg with ``args`` (without the leading binary). Returns stderr text."""
     if not ffmpeg_available():
         raise FFmpegError("ffmpeg is not installed or not on PATH")
-    cmd = ["ffmpeg", "-hide_banner", "-nostdin", "-y", *args]
+    binary = _ffmpeg_binary()
+    if not binary:
+        raise FFmpegError("ffmpeg is not installed or not on PATH")
+    cmd = [binary, "-hide_banner", "-nostdin", "-y", *args]
     log.debug("%s: %s", description, " ".join(cmd))
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)

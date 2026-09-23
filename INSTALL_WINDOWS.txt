@@ -1,0 +1,18 @@
+AUTO-EDITOR PRO STUDIO — WINDOWS
+
+FASTEST LOCAL BUILD
+1. Extract this ZIP to a normal folder on your Windows PC.
+2. Double-click BUILD_INSTALLER.bat.
+3. Wait for BUILD COMPLETE.
+4. Open release\Auto-Editor-PRO-Studio-Setup.exe.
+5. Install normally and launch Auto-Editor PRO Studio from the desktop shortcut.
+
+The first BUILD (not normal app use) may download development dependencies.
+The resulting Setup.exe bundles the Python engine, FFmpeg/ffprobe, Node runtime,
+Remotion dependencies and Remotion's Chrome Headless Shell so the installed app
+should not need Python, Node or FFmpeg installed separately.
+
+NOTES
+- Windows SmartScreen may warn because this private build is not code-signed yet.
+- API keys are optional and stored using Windows secure storage in the installed app.
+- Free Test mode uses no paid AI provider.

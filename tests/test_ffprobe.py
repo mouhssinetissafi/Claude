@@ -78,3 +78,13 @@ def test_probe_corrupt_file(tmp_path: Path) -> None:
         probe(bad)
     with pytest.raises(ProbeError):
         probe(tmp_path / "missing.mp4")
+
+
+def test_ffprobe_binary_can_be_overridden_by_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from autoeditor.media import ffprobe as module
+
+    fake = tmp_path / "ffprobe.exe"
+    fake.write_bytes(b"stub")
+    monkeypatch.setenv("AUTOEDITOR_FFPROBE", str(fake))
+    assert module.ffprobe_available()
+    assert module._ffprobe_binary() == str(fake)

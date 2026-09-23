@@ -97,3 +97,49 @@ def load_voice_timing(paths: JobPaths) -> list[LineTiming]:
     data = read_json(paths.voice_timing_json)
     validate(data, "voice_timing")
     return [LineTiming(**{k: item[k] for k in ("line_id", "start", "end", "duration", "file")}) for item in data]
+
+
+def build_imported_voice(script: dict[str, Any], source: Path, paths: JobPaths, cfg: Config) -> list[LineTiming]:
+    """Use a user-supplied narration file instead of TTS.
+
+    The imported track is converted to the engine's canonical MP3 and line
+    timings are estimated from each script line's share of the spoken words.
+    Word-level captions may later refine timing with a local transcriber. The
+    user's source file is never modified.
+    """
+    if not source.exists() or not source.is_file():
+        raise FileNotFoundError(f"imported narration not found: {source}")
+    paths.audio_dir.mkdir(parents=True, exist_ok=True)
+    ff.convert_audio(source, paths.voice_audio)
+    total = audio_duration(paths.voice_audio)
+    if total <= 0:
+        raise RuntimeError("imported narration has zero duration")
+    lines = list(script.get("lines", []))
+    if not lines:
+        raise RuntimeError("cannot align imported narration without script lines")
+    import re
+
+    counts = [max(1, len(re.findall(r"[A-Za-z0-9']+", str(line.get("narration", ""))))) for line in lines]
+    total_words = sum(counts)
+    cursor = 0.0
+    timings: list[LineTiming] = []
+    for index, (line, words) in enumerate(zip(lines, counts, strict=True)):
+        # Put rounding residue on the final line so the full track is covered.
+        duration = total - cursor if index == len(lines) - 1 else total * words / total_words
+        start = cursor
+        end = min(total, start + duration)
+        timings.append(
+            LineTiming(
+                line_id=int(line["id"]),
+                start=round(start, 3),
+                end=round(end, 3),
+                duration=round(end - start, 3),
+                file=paths.rel(paths.voice_audio),
+            )
+        )
+        cursor = end
+    payload = [t.to_dict() for t in timings]
+    validate(payload, "voice_timing")
+    write_json(paths.voice_timing_json, payload)
+    log.info("Imported narration: %.2fs across %d script lines", total, len(timings))
+    return timings

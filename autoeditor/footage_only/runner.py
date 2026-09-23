@@ -23,7 +23,7 @@ from autoeditor.footage_only.inventory import build_inventory, write_inventory
 from autoeditor.footage_only.normalize import SourceClip, load_manifest, normalize_clips
 from autoeditor.footage_only.photos import PHOTO_KIND, PhotoError, photo_budget_seconds, photo_framing_count, photo_hold_seconds, probe_photo, validate_photo
 from autoeditor.footage_only.scenes import Scene, build_scenes, scenes_from_doc
-from autoeditor.footage_only.shot_plan import estimate_seconds, expand_shot_plan, generate_shot_plan
+from autoeditor.footage_only.shot_plan import estimate_seconds, expand_shot_plan, generate_shot_plan, plan_manual_script
 from autoeditor.footage_only.timeline import build_timeline
 from autoeditor.footage_only.vision import analyze_scenes
 from autoeditor.logging_utils import configure_logging, get_logger
@@ -41,7 +41,7 @@ from autoeditor.pipeline.qc import finalize_output, move_to_review, run_qc
 from autoeditor.pipeline.review import NeedsReviewError, ReviewInfo, ai_disclosure, approval_status, write_review
 from autoeditor.pipeline.state import JobState, StageError
 from autoeditor.pipeline.upload import upload_allowed, upload_to_youtube
-from autoeditor.pipeline.voice import LineTiming, build_voice, load_voice_timing
+from autoeditor.pipeline.voice import LineTiming, build_imported_voice, build_voice, load_voice_timing
 from autoeditor.providers.base import TTSProvider
 from autoeditor.providers.factory import build_providers
 from autoeditor.providers.mock import MockTTS
@@ -250,16 +250,40 @@ def _run_stages(job: DiscoveredJob, cfg: Config, opts: FootageOnlyOptions, paths
     # Variation + originality inputs ------------------------------------------
     footage_signature = sorted({c.content_hash for c in clips if c.usable and c.content_hash})
     strongest = [int(s["scene_id"]) for s in inventory.get("strongest_scenes", [])]
+    manual_script_path = job.inbox_dir / "script.txt"
+    manual_script_text = manual_script_path.read_text(encoding="utf-8", errors="replace").strip() if manual_script_path.exists() else ""
+    manual_script = bool(manual_script_text)
+
+    imported_voice_files = sorted(job.inbox_dir.glob("voice_import.*"))
+    imported_voice = imported_voice_files[0] if imported_voice_files else None
+    if imported_voice is not None and not manual_script:
+        raise NeedsReviewError("imported narration currently requires a manual script so captions and scene timing stay aligned")
 
     def make_script(attempt: int) -> dict[str, Any]:
-        variation = variation_profile(f"{job.name}|{job.topic or ''}|{','.join(footage_signature)}", attempt=attempt)
-        opener_hint = strongest[(int(variation["opener_rotation"]) + attempt) % len(strongest)] if strongest else None
-        script = generate_shot_plan(
-            inventory, job.topic, providers.llm, cfg, paths, cache=llm_cache, variation=variation, opener_hint=opener_hint, house_style=house_style
-        )
-        # Estimate-based expansion before spending on TTS.
+        if manual_script:
+            opener_hint = strongest[attempt % len(strongest)] if strongest else None
+            script = plan_manual_script(
+                manual_script_text,
+                inventory,
+                job.topic,
+                providers.llm,
+                cfg,
+                paths,
+                cache=llm_cache,
+                force=opts.force_reanalyze,
+                opener_hint=opener_hint,
+            )
+        else:
+            variation = variation_profile(f"{job.name}|{job.topic or ''}|{','.join(footage_signature)}", attempt=attempt)
+            opener_hint = strongest[(int(variation["opener_rotation"]) + attempt) % len(strongest)] if strongest else None
+            script = generate_shot_plan(
+                inventory, job.topic, providers.llm, cfg, paths, cache=llm_cache, variation=variation, opener_hint=opener_hint, house_style=house_style
+            )
+        # Estimate-based expansion before spending on TTS. AI-written scripts may
+        # be expanded; user-supplied narration is never changed behind the user's back.
         while (
-            narration_shortfall(estimate_seconds(script["lines"], policy.words_per_second) + policy.outro_seconds, policy) > 0
+            not manual_script
+            and narration_shortfall(estimate_seconds(script["lines"], policy.words_per_second) + policy.outro_seconds, policy) > 0
             and int(script.get("expansions", 0)) < policy.max_expansions
         ):
             est = estimate_seconds(script["lines"], policy.words_per_second)
@@ -277,6 +301,13 @@ def _run_stages(job: DiscoveredJob, cfg: Config, opts: FootageOnlyOptions, paths
             if longer is None:
                 break
             script = longer
+        if manual_script:
+            estimate = estimate_seconds(script["lines"], policy.words_per_second) + policy.outro_seconds
+            if narration_shortfall(estimate, policy) > 0:
+                raise NeedsReviewError(
+                    f"manual script is about {estimate:.1f}s; minimum final duration is {policy.min_final_seconds:.0f}s. "
+                    "Lengthen the script or switch Script to AI."
+                )
         return script
 
     # Phase 6 -------------------------------------------------------------
@@ -284,6 +315,8 @@ def _run_stages(job: DiscoveredJob, cfg: Config, opts: FootageOnlyOptions, paths
         script = make_script(0)
         report = _originality_check(registry, job.name, script, footage_signature, cfg)
         if report.verdict == "reject":
+            if manual_script:
+                raise NeedsReviewError("manual script is too similar to an earlier video: " + "; ".join(report.notes))
             log.warning("Script too similar to an earlier job (%s); regenerating with a different angle", "; ".join(report.notes))
             script = make_script(1)
             report = _originality_check(registry, job.name, script, footage_signature, cfg)
@@ -296,11 +329,23 @@ def _run_stages(job: DiscoveredJob, cfg: Config, opts: FootageOnlyOptions, paths
     originality = read_json(paths.work / "originality.json") if (paths.work / "originality.json").exists() else None
 
     # Phase 7 + measured duration -------------------------------------------------
-    timings: list[LineTiming] = state.run_stage("voiced", lambda: build_voice(script, paths, tts, cfg), skip_if_done=lambda: load_voice_timing(paths))
-    if opts.skip_voice and not state.is_done("captioned"):
+    if imported_voice is not None:
+        timings = state.run_stage(
+            "voiced",
+            lambda: build_imported_voice(script, imported_voice, paths, cfg),
+            skip_if_done=lambda: load_voice_timing(paths),
+        )
+    else:
+        timings = state.run_stage("voiced", lambda: build_voice(script, paths, tts, cfg), skip_if_done=lambda: load_voice_timing(paths))
+    if opts.skip_voice and imported_voice is None and not state.is_done("captioned"):
         state.add_warning("--skip-voice: placeholder tone track used instead of narration")
     voice_duration = audio_duration(paths.voice_audio)
-    while narration_shortfall(voice_duration + policy.outro_seconds, policy) > 0 and int(script.get("expansions", 0)) < policy.max_expansions:
+    if manual_script and narration_shortfall(voice_duration + policy.outro_seconds, policy) > 0:
+        raise NeedsReviewError(
+            f"manual narration is {voice_duration + policy.outro_seconds:.1f}s; minimum final duration is {policy.min_final_seconds:.0f}s. "
+            "The editor will not pad or rewrite a manual script."
+        )
+    while (not manual_script) and narration_shortfall(voice_duration + policy.outro_seconds, policy) > 0 and int(script.get("expansions", 0)) < policy.max_expansions:
         log.info("Narration is %.1fs; minimum is %.0fs - asking the writer for more useful context", voice_duration, policy.min_final_seconds)
         longer = expand_shot_plan(
             script,
@@ -365,9 +410,14 @@ def _run_stages(job: DiscoveredJob, cfg: Config, opts: FootageOnlyOptions, paths
     timeline = state.run_stage("timeline_ready", timeline_ready, skip_if_done=lambda: read_json(paths.timeline_json))
 
     if opts.skip_render:
-        log.info("--skip-render: stopping after timeline. Render later with the same command without --skip-render.")
+        # Studio preview uses the exact same props the final Remotion render will
+        # receive. Stage assets and write props, but do not encode a video yet.
+        render_mod.stage_assets(paths, timeline, cfg)
+        props = render_mod.build_props(paths, timeline, captions, script, cfg)
+        write_json(paths.render_props_json, props)
+        log.info("--skip-render: edit is prepared for preview. Render later with the same command without --skip-render.")
         state.finish("timeline_ready")
-        return JobResult(name=job.name, status="skipped_render", message=str(paths.timeline_json))
+        return JobResult(name=job.name, status="skipped_render", message=str(paths.render_props_json))
 
     # Phase 10 ------------------------------------------------------------
     def rendered() -> Path:

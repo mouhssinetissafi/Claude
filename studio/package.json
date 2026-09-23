@@ -1,0 +1,95 @@
+{
+  "name": "auto-editor-pro-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Windows desktop UI for Auto-Editor PRO",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"tsc -p tsconfig.main.json --watch\" \"wait-on tcp:5173 dist/main/main.js && electron .\"",
+    "typecheck": "tsc --noEmit -p tsconfig.renderer.json && tsc --noEmit -p tsconfig.main.json",
+    "build:renderer": "vite build",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build": "npm run build:renderer && npm run build:main",
+    "start": "electron .",
+    "dist:win": "npm run build && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "@remotion/player": "4.0.526",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "remotion": "4.0.526"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "electron": "^35.0.0",
+    "electron-builder": "^26.0.12",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.0",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.autoeditorpro.studio",
+    "productName": "Auto-Editor PRO Studio",
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/engine",
+        "to": "engine",
+        "filter": [
+          "autoeditor-engine.exe"
+        ]
+      },
+      {
+        "from": "resources/node",
+        "to": "node",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/tools",
+        "to": "tools",
+        "filter": [
+          "ffmpeg.exe",
+          "ffprobe.exe"
+        ]
+      },
+      {
+        "from": "../remotion",
+        "to": "remotion",
+        "filter": [
+          "package.json",
+          "package-lock.json",
+          "src/**/*",
+          "public/**/*",
+          "remotion.config.ts",
+          "tsconfig.json",
+          "node_modules/**/*",
+          "node_modules/.bin/**/*",
+          "node_modules/.remotion/**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "artifactName": "Auto-Editor-PRO-Studio-Setup-${version}.${ext}",
+    "asar": true,
+    "directories": {
+      "output": "builder-out"
+    }
+  }
+}

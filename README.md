@@ -293,3 +293,8 @@ cd remotion && npx tsc --noEmit && npx remotion studio src/index.ts   # preview 
 Data contracts (script.json, captions.json, timeline.json, scenes.json, qc.json,
 metadata.json) are defined once in `autoeditor/schemas.py` and mirrored in
 `remotion/src/types.ts`.
+
+
+## Auto-Editor PRO Studio
+
+The Windows desktop boundary is documented in [`docs/STUDIO.md`](docs/STUDIO.md). The CLI remains fully supported.

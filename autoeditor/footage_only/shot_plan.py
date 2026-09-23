@@ -35,6 +35,163 @@ _NUMERIC_CLAIM = re.compile(
     re.IGNORECASE,
 )
 
+
+
+MANUAL_ASSIGNMENT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["assignments"],
+    "properties": {
+        "assignments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["line_id", "scene_ids", "overlay_text", "emphasis_words"],
+                "properties": {
+                    "line_id": {"type": "integer", "minimum": 1},
+                    "scene_ids": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+                    "overlay_text": {"type": ["string", "null"]},
+                    "emphasis_words": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+        }
+    },
+}
+
+MANUAL_ASSIGNMENT_SYSTEM = """You are the shot-matching editor for a vertical short.
+The narration is USER-SUPPLIED and locked: never rewrite, summarize or add words.
+For each narration line, select only scene IDs that exist in usable_scenes and visually support that exact line.
+Prefer strong, relevant scenes, vary the visuals, avoid rapid unnecessary repeats, and use a strongest scene for line 1.
+You may add a short overlay_text and emphasis_words only when they come directly from the supplied line.
+Return only the requested JSON assignments."""
+
+
+def split_manual_script(text: str) -> list[str]:
+    """Split a user-supplied script into voice/editing lines without rewriting it."""
+    cleaned = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not cleaned:
+        raise ProviderError("manual script is empty")
+    explicit = [line.strip() for line in cleaned.split("\n") if line.strip()]
+    if len(explicit) > 1:
+        return explicit
+    # A pasted paragraph is split only at sentence boundaries.  The words and
+    # punctuation remain exactly as supplied; this is segmentation, not writing.
+    parts = [part.strip() for part in re.split(r"(?<=[.!?])\s+", cleaned) if part.strip()]
+    return parts or [cleaned]
+
+
+def _deterministic_manual_assignments(lines: list[str], inventory: dict[str, Any], opener_hint: int | None) -> list[dict[str, Any]]:
+    usable = list(inventory.get("usable_scenes", []))
+    strongest = [int(s["scene_id"]) for s in inventory.get("strongest_scenes", [])]
+    ranked = sorted(usable, key=lambda s: (-float(s.get("visual_interest_score", 0)), int(s["scene_id"])))
+    order = [int(s["scene_id"]) for s in ranked]
+    if opener_hint in order:
+        order.remove(int(opener_hint))
+        order.insert(0, int(opener_hint))
+    elif strongest:
+        first = strongest[0]
+        if first in order:
+            order.remove(first)
+        order.insert(0, first)
+    if not order:
+        raise ProviderError("no usable scenes in inventory; cannot match a manual script")
+    out: list[dict[str, Any]] = []
+    cursor = 0
+    for line_id, narration in enumerate(lines, start=1):
+        words = _WORD.findall(narration)
+        desired = 1 if len(words) < 10 else 2 if len(words) < 22 else 3
+        scene_ids = [order[(cursor + offset) % len(order)] for offset in range(desired)]
+        cursor += desired
+        emphasis = [word for word in words if len(word) >= 7][:1]
+        out.append({
+            "line_id": line_id,
+            "scene_ids": scene_ids,
+            "overlay_text": emphasis[0].upper()[:24] if emphasis and line_id % 3 == 1 else None,
+            "emphasis_words": emphasis,
+        })
+    return out
+
+
+def plan_manual_script(
+    manual_text: str,
+    inventory: dict[str, Any],
+    topic: str | None,
+    llm: LLMProvider,
+    cfg: Config,
+    paths: JobPaths,
+    *,
+    cache: JsonCache | None = None,
+    force: bool = False,
+    opener_hint: int | None = None,
+) -> dict[str, Any]:
+    """Preserve a user's script verbatim while assigning available visuals to it."""
+    lines = split_manual_script(manual_text)
+    usable_ids = {int(s["scene_id"]) for s in inventory.get("usable_scenes", [])}
+    if not usable_ids:
+        raise ProviderError("no usable scenes in inventory; cannot match a manual script")
+
+    if getattr(llm, "name", "") == "mock":
+        assignments = _deterministic_manual_assignments(lines, inventory, opener_hint)
+    else:
+        payload = {
+            "topic": topic,
+            "locked_narration": [{"line_id": i + 1, "narration": line} for i, line in enumerate(lines)],
+            "preferred_opener_scene_id": opener_hint,
+            "inventory": inventory,
+        }
+        user = "Match existing footage to this locked user script. Input JSON:\n" + json.dumps(payload, ensure_ascii=False)
+        key = make_key("manual_scene_assignment", getattr(llm, "name", "llm"), cfg.get("llm.model"), PROMPT_VERSION, user)
+        result_data = None if force or cache is None else cache.get(key)
+        if result_data is None:
+            result = llm.complete_json(
+                system=MANUAL_ASSIGNMENT_SYSTEM,
+                user=user,
+                output_schema=MANUAL_ASSIGNMENT_SCHEMA,
+                max_tokens=min(8000, int(cfg.get("llm.max_tokens", 16000))),
+            )
+            result_data = result.data
+            if cache is not None:
+                cache.put(key, result_data)
+        assignments = list(result_data.get("assignments", []))
+
+    by_id = {int(a.get("line_id", 0)): a for a in assignments}
+    plan_lines: list[dict[str, Any]] = []
+    for line_id, narration in enumerate(lines, start=1):
+        assignment = by_id.get(line_id, {})
+        scene_ids: list[int] = []
+        for raw in assignment.get("scene_ids", []) or []:
+            try:
+                sid = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if sid in usable_ids and sid not in scene_ids:
+                scene_ids.append(sid)
+        if not scene_ids:
+            fallback = _deterministic_manual_assignments([narration], inventory, opener_hint if line_id == 1 else None)[0]
+            scene_ids = list(fallback["scene_ids"])
+        overlay = assignment.get("overlay_text")
+        if isinstance(overlay, str) and overlay.strip():
+            overlay = overlay.strip()[:24]
+        else:
+            overlay = None
+        emphasis = [str(w).strip() for w in assignment.get("emphasis_words", []) or [] if str(w).strip() and str(w).lower().strip(".,!?") in narration.lower()]
+        plan_lines.append({"id": line_id, "narration": narration, "scene_ids": scene_ids, "overlay_text": overlay, "emphasis_words": emphasis})
+
+    plan = {
+        "title": (topic or "Manual script").strip()[:100],
+        "description": "User-supplied narration with visuals matched from the project media.",
+        "facts_to_verify": numeric_claims(plan_lines),
+        "lines": plan_lines,
+    }
+    repaired, notes = repair_plan(plan, inventory, cfg, opener_hint=opener_hint)
+    # repair_plan must never rewrite narration. Guard that invariant explicitly.
+    if [ln["narration"] for ln in repaired["lines"]] != lines[: len(repaired["lines"])]:
+        raise ProviderError("manual-script safety check failed: narration changed during planning")
+    for note in notes:
+        log.info("manual shot plan: %s", note)
+    return _finish_script(repaired, topic, cfg, paths, variation=None, expansions=0)
+
 SYSTEM_PROMPT = """You are the script writer and shot planner for an automated YouTube Shorts editor.
 You will receive a FOOTAGE INVENTORY (scenes that exist, with descriptions and scores) and optionally a TOPIC.
 

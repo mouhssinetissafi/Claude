@@ -7,6 +7,7 @@ fixture output; ``probe`` runs ffprobe and feeds it through the parser.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
@@ -43,8 +44,15 @@ class MediaInfo:
         return asdict(self)
 
 
+def _ffprobe_binary() -> str | None:
+    explicit = os.environ.get("AUTOEDITOR_FFPROBE", "").strip()
+    if explicit and Path(explicit).exists():
+        return explicit
+    return shutil.which("ffprobe")
+
+
 def ffprobe_available() -> bool:
-    return shutil.which("ffprobe") is not None
+    return _ffprobe_binary() is not None
 
 
 def _parse_rate(raw: str | None) -> float:
@@ -143,8 +151,11 @@ def probe(path: Path, timeout: int = 60) -> MediaInfo:
         raise ProbeError("ffprobe is not installed or not on PATH")
     if not path.exists():
         raise ProbeError(f"file does not exist: {path}")
+    binary = _ffprobe_binary()
+    if not binary:
+        raise ProbeError("ffprobe is not installed or not on PATH")
     cmd = [
-        "ffprobe",
+        binary,
         "-v",
         "error",
         "-print_format",
@@ -170,8 +181,11 @@ def audio_duration(path: Path, timeout: int = 60) -> float:
     """Duration of an audio (or video) file in seconds."""
     if not ffprobe_available():
         raise ProbeError("ffprobe is not installed or not on PATH")
+    binary = _ffprobe_binary()
+    if not binary:
+        raise ProbeError("ffprobe is not installed or not on PATH")
     cmd = [
-        "ffprobe",
+        binary,
         "-v",
         "error",
         "-show_entries",
