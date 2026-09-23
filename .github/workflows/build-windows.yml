@@ -1,23 +1,18 @@
 name: Build Windows Studio Installer
 
+# DIAGNOSTIC VERSION on branch claude/auto-editor-footage-only-8chriw only.
+# Reproduces the "New project does nothing" bug on the installed run #7 build,
+# then builds and installs the fixed app and tests New project end to end.
+# main keeps the real workflow.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'autoeditor/**'
-      - 'studio/**'
-      - 'remotion/**'
-      - 'packaging/**'
-      - 'scripts/build_studio_windows.ps1'
-      - 'studio_engine.py'
-      - 'pyproject.toml'
-      - 'config/**'
-      - 'assets/**'
-      - '.github/workflows/build-windows.yml'
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
-  build-windows:
+  newproject-e2e:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -37,13 +32,56 @@ jobs:
           cache: 'npm'
           cache-dependency-path: remotion/package-lock.json
 
-      - name: Build installer on Windows
+      - name: Download the installer built by run 7 (the version in use)
+        uses: actions/download-artifact@v4
+        with:
+          name: Auto-Editor-PRO-Studio-Windows
+          run-id: 35915808482
+          github-token: ${{ github.token }}
+          path: old-installer
+
+      - name: Install Playwright driver
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path e2e-runner | Out-Null
+          Copy-Item diag/newproject_e2e.cjs e2e-runner/
+          Push-Location e2e-runner
+          npm init -y | Out-Null
+          npm i --no-audit --no-fund playwright-core@1.63.0
+          if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+          Pop-Location
+
+      - name: Install run 7 build silently
+        shell: powershell
+        run: |
+          $setup = Get-ChildItem old-installer -Filter *.exe | Select-Object -First 1
+          Start-Process -Wait -FilePath $setup.FullName -ArgumentList '/S', '/D=D:\ae-old'
+          $exe = Get-ChildItem 'D:\ae-old' -Filter 'Auto-Editor PRO Studio.exe' -Recurse | Select-Object -First 1
+          if (-not $exe) { Get-ChildItem 'D:\ae-old' -Recurse | Select-Object -First 30 | Format-Table FullName; throw "installed exe not found" }
+          "installed: $($exe.FullName)"
+
+      - name: Reproduce on run 7 build (probe, records behaviour)
+        shell: powershell
+        run: |
+          $exe = (Get-ChildItem 'D:\ae-old' -Filter 'Auto-Editor PRO Studio.exe' -Recurse | Select-Object -First 1).FullName
+          node e2e-runner/newproject_e2e.cjs probe "$exe"
+          if ($LASTEXITCODE -ne 0) { throw "probe could not run" }
+
+      - name: Build fixed installer with the real build script
         shell: powershell
         run: ./scripts/build_studio_windows.ps1 -SkipPrerequisiteInstall -SkipTests
 
-      - name: Upload installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: Auto-Editor-PRO-Studio-Windows
-          path: release/Auto-Editor-PRO-Studio-Setup.exe
-          if-no-files-found: error
+      - name: Install fixed build silently
+        shell: powershell
+        run: |
+          Start-Process -Wait -FilePath (Resolve-Path release/Auto-Editor-PRO-Studio-Setup.exe) -ArgumentList '/S', '/D=D:\ae-new'
+          $exe = Get-ChildItem 'D:\ae-new' -Filter 'Auto-Editor PRO Studio.exe' -Recurse | Select-Object -First 1
+          if (-not $exe) { throw "installed exe not found" }
+          "installed: $($exe.FullName)"
+
+      - name: Verify New project on the installed fixed build
+        shell: powershell
+        run: |
+          $exe = (Get-ChildItem 'D:\ae-new' -Filter 'Auto-Editor PRO Studio.exe' -Recurse | Select-Object -First 1).FullName
+          node e2e-runner/newproject_e2e.cjs verify "$exe"
+          if ($LASTEXITCODE -ne 0) { throw "New project verification failed" }
