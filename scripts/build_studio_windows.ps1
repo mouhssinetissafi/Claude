@@ -105,6 +105,8 @@ Write-Step "Building Python engine sidecar"
 Invoke-Python -PythonArgs @("-m", "PyInstaller", "--noconfirm", "--clean", "packaging/autoeditor_engine.spec")
 New-Item -ItemType Directory -Force -Path studio/resources/engine | Out-Null
 Copy-Item -Force dist/autoeditor-engine.exe studio/resources/engine/autoeditor-engine.exe
+# Windows PowerShell prefixes piped text with a byte-order mark unless told otherwise; the engine expects plain JSON lines.
+$OutputEncoding = New-Object System.Text.UTF8Encoding $false
 $ping = '{"id":1,"method":"ping","params":{}}' | & studio/resources/engine/autoeditor-engine.exe | Select-Object -First 1
 if (-not ($ping -match '"ok"\s*:\s*true')) { throw "Packaged engine failed its ping check: $ping" }
 
