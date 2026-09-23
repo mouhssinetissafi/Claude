@@ -52,13 +52,6 @@ export interface StudioJob {
   final_path: string | null;
   pid: number | null;
   prepare_only: boolean;
-  /** Current engine stage key, e.g. "analyzed" (null until the engine reports its first stage). */
-  stage?: string | null;
-  /** Human label of what the engine is doing now, e.g. "Analyzing scenes". */
-  stage_label?: string;
-  /** 1-based position of the current stage (0 before the first stage) out of stage_total. */
-  stage_index?: number;
-  stage_total?: number;
 }
 
 export interface CredentialStatus {

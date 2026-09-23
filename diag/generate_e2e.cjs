@@ -124,19 +124,16 @@ async function probe() {
 async function verify() {
   // 1. The same scenario must finish, with stage progress visible in the UI.
   let {app, win, projectRoot} = await setup();
-  // Record every text the on-screen stage line shows (a MutationObserver sees each React update).
-  await win.evaluate(() => {
-    window.__stageTexts = [];
-    new MutationObserver(() => {
-      const el = document.querySelector('.job-stage');
-      const text = el ? el.textContent.replace(/\s+/g, ' ').trim() : '';
-      if (text && window.__stageTexts[window.__stageTexts.length - 1] !== text) window.__stageTexts.push(text);
-    }).observe(document.body, {subtree: true, childList: true, characterData: true});
-  });
+  const baseline = new Set(enginePids());
   await win.click('button:has-text("Generate Edit")');
+  const stagesShown = new Set();
+  const poll = setInterval(async () => {
+    const text = await win.locator('.job-stage').innerText().catch(() => '');
+    if (text) stagesShown.add(text.replace(/\s+/g, ' ').trim());
+  }, 700);
   const {job, stalled} = await watch(win, (j) => !['queued', 'running', 'cancelling'].includes(j.status), LIMIT_MS);
-  const stagesShown = new Set(await win.evaluate(() => window.__stageTexts));
-  log('stage labels shown in the UI:', JSON.stringify([...stagesShown]));
+  clearInterval(poll);
+  log('stage labels seen in the UI:', JSON.stringify([...stagesShown]));
   if (stalled || !job || job.status !== 'prepared') { await dumpDiagnostics(projectRoot, job); throw new Error(`generation did not finish: ${job && job.status}`); }
   if (stagesShown.size < 3) throw new Error('UI did not show stage progress');
   await win.waitForSelector('.player-wrap', {timeout: 60000});
