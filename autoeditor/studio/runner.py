@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -28,6 +30,24 @@ from autoeditor.studio.project import StudioProject, open_project
 
 EventSink = Callable[[dict[str, Any]], None]
 
+# Engine stages in pipeline order (see autoeditor/pipeline/state.py), with the label the UI shows.
+STAGE_LABELS: dict[str, str] = {
+    "discovered": "Reading your media",
+    "normalized": "Preparing photos and videos",
+    "analyzed": "Analyzing scenes",
+    "scripted": "Planning the script and shots",
+    "voiced": "Creating the voice track",
+    "captioned": "Timing captions",
+    "timeline_ready": "Building the timeline",
+    "rendered": "Rendering the video",
+    "qc_passed": "Checking quality",
+}
+PREPARE_STAGES = ["discovered", "normalized", "analyzed", "scripted", "voiced", "captioned", "timeline_ready"]
+EXPORT_STAGES = [*PREPARE_STAGES, "rendered", "qc_passed"]
+_STAGE_LINE = re.compile(r"\[(\w+)\] (starting|done|already complete)")
+_REVIEW_LINE = re.compile(r"stopped for human review: (.+)$")
+_FAILED_LINE = re.compile(r"failed at stage '(\w+)': (.+)$")
+
 
 @dataclass
 class StudioJob:
@@ -43,9 +63,53 @@ class StudioJob:
     final_path: str | None = None
     pid: int | None = None
     prepare_only: bool = False
+    stage: str | None = None  # current engine stage key (None until the engine reports one)
+    stage_label: str = "Waiting to start"
+    stage_index: int = 0  # 1-based position of the current stage; 0 before the first stage
+    stage_total: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def child_environment() -> dict[str, str]:
+    """Environment for the engine child process.
+
+    A frozen (PyInstaller one-file) engine launching its own executable must ask the
+    new instance to reset PyInstaller's internal environment; otherwise the child
+    inherits the running service's ``_PYI_*`` variables and, on Windows, its
+    launcher never starts Python (the job then hangs with no output).
+    """
+    env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"
+    if getattr(sys, "frozen", False):
+        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
+def kill_process_tree(proc: subprocess.Popen[str]) -> None:
+    """Stop the engine child and everything it started (ffmpeg, node, browsers)."""
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        # /T walks the child tree (PyInstaller's Python process, ffmpeg, node, chrome); /F forces it.
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, timeout=60, check=False)
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            proc.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+    try:
+        proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
 
 
 class StudioJobManager:
@@ -73,7 +137,14 @@ class StudioJobManager:
         job_id = uuid.uuid4().hex[:12]
         engine_name = sanitize_job_name(project.project_id or project.name)
         command = self._build_command(project, engine_name, mock=mock, dry_run=dry_run, prepare_only=prepare_only)
-        job = StudioJob(id=job_id, project_root=str(project.root_path), engine_job_name=engine_name, command=command, prepare_only=prepare_only)
+        job = StudioJob(
+            id=job_id,
+            project_root=str(project.root_path),
+            engine_job_name=engine_name,
+            command=command,
+            prepare_only=prepare_only,
+            stage_total=len(PREPARE_STAGES if prepare_only else EXPORT_STAGES),
+        )
         with self._lock:
             self._jobs[job_id] = job
         project.last_job_id = job_id
@@ -91,14 +162,12 @@ class StudioJobManager:
             if job.status not in {"queued", "running"}:
                 return job.to_dict()
             job.status = "cancelling"
+            job.stage_label = "Cancelling"
         self._emit("job.status", job)
-        if proc is not None and proc.poll() is None:
+        if proc is not None:
             try:
-                proc.terminate()
-                proc.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-            except OSError:
+                kill_process_tree(proc)
+            except (OSError, subprocess.SubprocessError):
                 pass
         with self._lock:
             job.status = "cancelled"
@@ -202,34 +271,55 @@ class StudioJobManager:
                 return
             job.status = "running"
             job.started_at = time.time()
+            job.stage_label = "Starting the engine"
             command = list(job.command)
         self._emit("job.status", job)
+        review_reason = ""
+        failure_reason = ""
         try:
             proc = subprocess.Popen(
                 command,
                 cwd=str(REPO_ROOT),
+                stdin=subprocess.DEVNULL,  # never share the service's command pipe with the job
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
+                env=child_environment(),
+                start_new_session=os.name != "nt",  # own process group so Cancel can stop the whole tree
             )
             with self._lock:
                 self._processes[job_id] = proc
                 job.pid = proc.pid
+                cancelled_early = job.status in {"cancelling", "cancelled"}
+            if cancelled_early:
+                kill_process_tree(proc)
             if proc.stdout is not None:
                 for line in proc.stdout:
                     clean = line.rstrip("\r\n")
-                    if clean:
-                        self._event_sink({"event": "job.log", "params": {"job_id": job_id, "line": clean}})
+                    if not clean:
+                        continue
+                    self._event_sink({"event": "job.log", "params": {"job_id": job_id, "line": clean}})
+                    if self._track_line(job, clean):
+                        self._emit("job.status", job)
+                    review = _REVIEW_LINE.search(clean)
+                    if review:
+                        review_reason = review.group(1).strip()
+                    failed = _FAILED_LINE.search(clean)
+                    if failed:
+                        failure_reason = f"{STAGE_LABELS.get(failed.group(1), failed.group(1))} failed: {failed.group(2).strip()}"
             code = proc.wait()
             project = open_project(Path(job.project_root))
             final = project.output_dir / job.engine_job_name / "final.mp4"
             with self._lock:
-                if job.status == "cancelling":
+                if job.status in {"cancelling", "cancelled"}:
                     job.status = "cancelled"
                     job.message = "Cancelled by user"
+                elif review_reason:
+                    job.status = "needs_review"
+                    job.message = review_reason
                 elif code == 0:
                     if job.prepare_only:
                         props = project.engine_dir / "work" / job.engine_job_name / "render_props.json"
@@ -240,7 +330,7 @@ class StudioJobManager:
                         job.message = "Generation finished" if final.exists() else "Generation finished; review may be required"
                 else:
                     job.status = "failed"
-                    job.message = f"Engine exited with code {code}"
+                    job.message = failure_reason or f"Engine exited with code {code}"
                 job.return_code = code
                 job.ended_at = time.time()
                 job.final_path = str(final) if final.exists() else None
@@ -253,6 +343,32 @@ class StudioJobManager:
             with self._lock:
                 self._processes.pop(job_id, None)
             self._emit("job.status", job)
+
+    def _track_line(self, job: StudioJob, line: str) -> bool:
+        """Update the job's stage from an engine ``[stage] starting|done`` line; True if it changed."""
+        match = _STAGE_LINE.search(line)
+        if not match:
+            return False
+        stage = match.group(1)
+        stages = PREPARE_STAGES if job.prepare_only else EXPORT_STAGES
+        if stage not in stages:
+            return False
+        with self._lock:
+            if job.status != "running":
+                return False
+            index = stages.index(stage) + 1
+            if match.group(2) == "starting":
+                label = STAGE_LABELS[stage]
+            elif index < len(stages):
+                # A stage finished; the next one is about to start.
+                label = STAGE_LABELS[stages[index]]
+                stage, index = stages[index], index + 1
+            else:
+                label = "Finishing up"
+            if (job.stage, job.stage_index, job.stage_label) == (stage, index, label):
+                return False
+            job.stage, job.stage_index, job.stage_label = stage, index, label
+            return True
 
     def _emit(self, event_name: str, job: StudioJob) -> None:
         self._event_sink({"event": event_name, "params": {"job": job.to_dict()}})

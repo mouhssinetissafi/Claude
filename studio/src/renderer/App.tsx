@@ -272,17 +272,38 @@ const Segmented: React.FC<{value: string; options: [string,string][]; onChange: 
   <div className="segmented">{options.map(([id,label]) => <button key={id} className={value === id ? 'active' : ''} onClick={() => onChange(id)}>{label}</button>)}</div>
 );
 
-const JobCard: React.FC<{job: StudioJob; logs: string[]; onCancel: () => void; onReveal: () => void}> = ({job, logs, onCancel, onReveal}) => (
-  <div className="job-card">
-    <div className="job-head"><strong>{job.status.replace('_',' ')}</strong><span>{job.pid ? `PID ${job.pid}` : ''}</span></div>
-    <div className="progress-indeterminate"><i className={['running','queued','cancelling'].includes(job.status) ? 'moving' : ['prepared','complete'].includes(job.status) ? 'done' : ''} /></div>
-    <div className="log-box">{logs.slice(-10).map((line,i) => <div key={`${i}-${line}`}>{line}</div>)}</div>
-    <div className="job-actions">
-      {['running','queued'].includes(job.status) ? <button onClick={onCancel}>Cancel</button> : null}
-      {job.final_path ? <button className="primary" onClick={onReveal}>Show final video</button> : null}
+const formatElapsed = (seconds: number): string => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+
+const JobCard: React.FC<{job: StudioJob; logs: string[]; onCancel: () => void; onReveal: () => void}> = ({job, logs, onCancel, onReveal}) => {
+  const active = ['running', 'queued', 'cancelling'].includes(job.status);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return undefined;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+  const total = job.stage_total ?? 0;
+  const index = job.stage_index ?? 0;
+  const elapsed = job.started_at ? Math.max(0, ((active ? now / 1000 : job.ended_at ?? now / 1000) - job.started_at)) : 0;
+  const percent = ['prepared', 'complete'].includes(job.status) ? 100 : total > 0 ? Math.round((Math.max(0, index - 1) / total) * 100) : 0;
+  return (
+    <div className="job-card">
+      <div className="job-head"><strong>{job.status.replace('_',' ')}</strong><span>{job.started_at ? formatElapsed(elapsed) : ''}</span></div>
+      {active ? (
+        <div className="job-stage">{index > 0 && total > 0 ? `Step ${index} of ${total} · ` : ''}{job.stage_label || 'Starting'}</div>
+      ) : job.message ? (
+        <div className={`job-message ${['failed', 'needs_review'].includes(job.status) ? 'problem' : ''}`}>{job.message}</div>
+      ) : null}
+      <div className="job-progress"><i className={active && index === 0 ? 'waiting' : ''} style={{width: `${active && index === 0 ? 100 : percent}%`}} /></div>
+      <div className="log-box">{logs.slice(-10).map((line,i) => <div key={`${i}-${line}`}>{line}</div>)}</div>
+      <div className="job-actions">
+        {['running','queued'].includes(job.status) ? <button onClick={onCancel}>Cancel</button> : null}
+        {job.status === 'cancelling' ? <button disabled>Cancelling…</button> : null}
+        {job.final_path ? <button className="primary" onClick={onReveal}>Show final video</button> : null}
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 const NewProjectModal: React.FC<{name: string; setName: (v: string) => void; error: string; busy: boolean; create: () => void; close: () => void}> = (p) => (
   <div className="modal-backdrop" onMouseDown={p.busy ? undefined : p.close}>

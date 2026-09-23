@@ -82,6 +82,13 @@ label.inline input { width: auto; accent-color: #7566ff; }
 .progress-indeterminate i.moving { width: 36%; animation: move 1.2s linear infinite; }
 .progress-indeterminate i.done { width: 100%; background: #35b779; }
 @keyframes move { from { transform: translateX(-100%); } to { transform: translateX(380%); } }
+.job-stage { margin-top: 8px; font-size: 12px; color: #dfe6f3; }
+.job-message { margin-top: 8px; font-size: 11px; color: #9fb0c8; line-height: 1.45; }
+.job-message.problem { color: #ffd7db; background: #3a1c21; border: 1px solid #6b2f37; padding: 8px 10px; border-radius: 8px; }
+.job-progress { height: 4px; background: #202838; border-radius: 10px; overflow: hidden; margin: 10px 0; }
+.job-progress i { display: block; height: 100%; background: #6d5dfc; transition: width .4s ease; }
+.job-progress i.waiting { background: linear-gradient(90deg, #202838, #6d5dfc, #202838); background-size: 200% 100%; animation: waiting 1.4s linear infinite; }
+@keyframes waiting { from { background-position: 200% 0; } to { background-position: 0 0; } }
 .log-box { max-height: 140px; overflow: auto; font-family: ui-monospace,Consolas,monospace; font-size: 9px; line-height: 1.5; color: #8290a7; background: #080b10; padding: 8px; border-radius: 7px; }
 .job-actions { display: flex; gap: 8px; margin-top: 9px; }
 .modal-backdrop { position: fixed; inset: 0; display: grid; place-items: center; z-index: 20; background: rgba(0,0,0,.68); backdrop-filter: blur(8px); }

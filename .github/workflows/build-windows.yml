@@ -1,20 +1,19 @@
 name: Build Windows Studio Installer
 
 # DIAGNOSTIC VERSION on branch claude/auto-editor-footage-only-8chriw only.
-# Reproduces "Generate Edit stuck on Running" on the installed build from run 9
-# (9 photos, manual script, free test mode) and dumps where it hangs.
+# Builds the fixed installer, installs it, and verifies Generate Edit
+# (9 photos, manual script, free test mode): stage progress, preview, Cancel.
 # main keeps the real workflow.
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
-  actions: read
 
 jobs:
-  generate-probe:
+  generate-verify:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,19 +22,18 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Set up Node 22
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: remotion/package-lock.json
 
-      - name: Download the installer built by run 9 (the version in use)
-        uses: actions/download-artifact@v4
-        with:
-          name: Auto-Editor-PRO-Studio-Windows
-          run-id: 35919504545
-          github-token: ${{ github.token }}
-          path: old-installer
+      - name: Build fixed installer with the real build script
+        shell: powershell
+        run: ./scripts/build_studio_windows.ps1 -SkipPrerequisiteInstall -SkipTests
 
       - name: Tools (Pillow, py-spy, Playwright driver) and 9 photos
         shell: powershell
@@ -49,20 +47,18 @@ jobs:
           npm i --no-audit --no-fund playwright-core@1.63.0
           if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
           Pop-Location
-          py-spy --version
 
-      - name: Install run 9 build silently
+      - name: Install fixed build silently
         shell: powershell
         run: |
-          $setup = Get-ChildItem old-installer -Filter *.exe | Select-Object -First 1
-          Start-Process -Wait -FilePath $setup.FullName -ArgumentList '/S', '/D=D:\ae-old'
-          $exe = Get-ChildItem 'D:\ae-old' -Filter 'Auto-Editor PRO Studio.exe' -Recurse | Select-Object -First 1
+          Start-Process -Wait -FilePath (Resolve-Path release/Auto-Editor-PRO-Studio-Setup.exe) -ArgumentList '/S', '/D=D:\ae-new'
+          $exe = Get-ChildItem 'D:\ae-new' -Filter 'Auto-Editor PRO Studio.exe' -Recurse | Select-Object -First 1
           if (-not $exe) { throw "installed exe not found" }
           "installed: $($exe.FullName)"
 
-      - name: Reproduce Generate Edit (9 photos, manual script, free test mode)
+      - name: Verify Generate Edit, stage progress and Cancel on the installed build
         shell: powershell
         run: |
-          $exe = (Get-ChildItem 'D:\ae-old' -Filter 'Auto-Editor PRO Studio.exe' -Recurse | Select-Object -First 1).FullName
-          node e2e-runner/generate_e2e.cjs probe "$exe" D:\photos 10
-          if ($LASTEXITCODE -ne 0) { throw "probe could not run" }
+          $exe = (Get-ChildItem 'D:\ae-new' -Filter 'Auto-Editor PRO Studio.exe' -Recurse | Select-Object -First 1).FullName
+          node e2e-runner/generate_e2e.cjs verify "$exe" D:\photos 10
+          if ($LASTEXITCODE -ne 0) { throw "Generate Edit verification failed" }
