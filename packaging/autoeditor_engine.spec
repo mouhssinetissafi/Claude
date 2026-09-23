@@ -3,7 +3,7 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
 
-root = Path(SPECPATH).parent.parent
+root = Path(SPECPATH).parent
 hiddenimports = collect_submodules("autoeditor")
 
 a = Analysis(
