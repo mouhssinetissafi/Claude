@@ -1,8 +1,8 @@
 name: Build Windows Studio Installer
 
 # DIAGNOSTIC VERSION on branch claude/auto-editor-footage-only-8chriw only.
-# Reproduces the engine ping check from scripts/build_studio_windows.ps1 and
-# records the exact bytes involved. main keeps the real workflow.
+# Verifies a candidate fix for the engine ping check in
+# scripts/build_studio_windows.ps1. main keeps the real workflow.
 on:
   workflow_dispatch:
 
@@ -19,26 +19,12 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Encoding facts
+      - name: Bytes piped with Console InputEncoding = UTF-8 without BOM
         shell: powershell
         run: |
-          $ErrorActionPreference = 'Continue'
-          "PowerShell: $($PSVersionTable.PSVersion)"
-          "OutputEncoding (default): $($OutputEncoding.WebName) preamble bytes=$($OutputEncoding.GetPreamble().Length)"
-          "Console InputEncoding: $([Console]::InputEncoding.WebName)  OutputEncoding: $([Console]::OutputEncoding.WebName)"
-          python -c "import locale; print('python preferred encoding:', locale.getpreferredencoding(False))"
-
-      - name: Bytes PowerShell pipes into a program (default OutputEncoding)
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Continue'
-          '{"id":1,"method":"ping","params":{}}' | python diag/dump_stdin.py
-
-      - name: Bytes PowerShell pipes into a program (UTF-8 without BOM, as the script now sets)
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Continue'
-          $OutputEncoding = New-Object System.Text.UTF8Encoding $false
+          $ErrorActionPreference = "Stop"
+          [Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false
+          "Console InputEncoding now: $([Console]::InputEncoding.WebName) preamble bytes=$([Console]::InputEncoding.GetPreamble().Length)"
           '{"id":1,"method":"ping","params":{}}' | python diag/dump_stdin.py
 
       - name: Build engine exactly as the script does
@@ -49,18 +35,13 @@ jobs:
           python -m PyInstaller --noconfirm --clean packaging/autoeditor_engine.spec
           if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 
-      - name: Engine ping through PowerShell (every output line)
+      - name: The script's exact ping lines with the candidate fix
         shell: powershell
         run: |
-          $ErrorActionPreference = 'Continue'
-          $OutputEncoding = New-Object System.Text.UTF8Encoding $false
-          $lines = '{"id":1,"method":"ping","params":{}}' | & dist/autoeditor-engine.exe 2>&1
-          $i = 0
-          foreach ($line in $lines) { $i++; "line $i : $line" }
-          "exit code: $LASTEXITCODE"
-
-      - name: Engine ping with exact bytes (no PowerShell pipe)
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Continue'
-          python diag/engine_probe.py dist/autoeditor-engine.exe
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path studio/resources/engine | Out-Null
+          Copy-Item -Force dist/autoeditor-engine.exe studio/resources/engine/autoeditor-engine.exe
+          [Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false
+          $ping = '{"id":1,"method":"ping","params":{}}' | & studio/resources/engine/autoeditor-engine.exe | Select-Object -First 1
+          if (-not ($ping -match '"ok"\s*:\s*true')) { throw "Packaged engine failed its ping check: $ping" }
+          "PING CHECK PASSED: $ping"
